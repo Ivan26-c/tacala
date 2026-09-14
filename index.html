@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tacala - Editor y Organizador Profesional de PDFs</title>
+  <meta name="description" content="Organiza, edita, agrega hojas, mueve, rota y elimina páginas de tus PDFs de forma rápida, moderna y 100% segura en tu navegador.">
+  
+  <!-- Google Fonts: Outfit & Plus Jakarta Sans -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  
+  <!-- PDF.js & PDF-Lib CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://unpkg.com/pdf-lib@1.17.9/dist/pdf-lib.min.js"></script>
+  
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Background Glow Orbs -->
+  <div class="bg-glow orb-1"></div>
+  <div class="bg-glow orb-2"></div>
+
+  <!-- Main App Wrapper -->
+  <div class="app-container">
+    
+    <!-- Top Navigation Bar -->
+    <header class="navbar glass-panel">
+      <div class="nav-brand">
+        <div class="logo-icon">
+          <i class="fa-solid fa-file-shield"></i>
+        </div>
+        <div class="logo-text">
+          <span class="brand-title">Tacala</span>
+          <span class="brand-badge">PDF Studio</span>
+        </div>
+      </div>
+
+      <div class="nav-status" id="navStatus">
+        <span class="status-indicator"></span>
+        <span id="pageCountStatus">Sin documentos cargados</span>
+      </div>
+
+      <div class="nav-actions">
+        <!-- Hidden Inputs -->
+        <input type="file" id="pdfFileInput" accept="application/pdf" multiple style="display: none;">
+        <input type="file" id="imageFileInput" accept="image/png, image/jpeg, image/webp" multiple style="display: none;">
+        
+        <button class="btn btn-hp" id="btnOpenHpScan" title="Escanear directamente desde la impresora HP en red">
+          <i class="fa-solid fa-print"></i>
+          <span>Escanear con HP</span>
+        </button>
+
+        <button class="btn btn-secondary" id="btnUploadPdf" title="Subir uno o varios PDFs">
+          <i class="fa-solid fa-cloud-arrow-up"></i>
+          <span>Subir PDF</span>
+        </button>
+
+        <div class="dropdown">
+          <button class="btn btn-secondary dropdown-trigger" id="btnAddPageDropdown" title="Agregar nuevas hojas">
+            <i class="fa-solid fa-plus"></i>
+            <span>Agregar Hoja</span>
+            <i class="fa-solid fa-chevron-down caret"></i>
+          </button>
+          <div class="dropdown-menu glass-panel" id="addPageMenu">
+            <button class="dropdown-item" id="btnMenuHpScan">
+              <i class="fa-solid fa-print"></i>
+              <div>
+                <strong>Escanear con HP 4103fdw</strong>
+                <small>Desde cama plana o alimentador ADF</small>
+              </div>
+            </button>
+            <button class="dropdown-item" id="btnMenuBlankPage">
+              <i class="fa-regular fa-file"></i>
+              <div>
+                <strong>Hoja en blanco</strong>
+                <small>A4, personalizable o rayada</small>
+              </div>
+            </button>
+            <button class="dropdown-item" id="btnMenuUploadImage">
+              <i class="fa-regular fa-image"></i>
+              <div>
+                <strong>Desde Imagen</strong>
+                <small>PNG, JPG o WebP</small>
+              </div>
+            </button>
+            <button class="dropdown-item" id="btnMenuAppendPdf">
+              <i class="fa-solid fa-file-circle-plus"></i>
+              <div>
+                <strong>Anexar otro PDF</strong>
+                <small>Sumar páginas de otro archivo</small>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <button class="btn btn-danger-outline" id="btnClearAll" title="Eliminar todo el PDF">
+          <i class="fa-solid fa-trash-can"></i>
+          <span>Eliminar PDF</span>
+        </button>
+
+        <button class="btn btn-secondary" id="btnSaveToFolder" title="Guardar directamente en una carpeta elegida de tu PC">
+          <i class="fa-solid fa-folder-arrow-down"></i>
+          <span>Guardar en PC</span>
+        </button>
+
+        <button class="btn btn-primary" id="btnDownloadPdf" title="Descargar PDF compilado">
+          <i class="fa-solid fa-download"></i>
+          <span id="downloadBtnText">Descargar PDF</span>
+          <div class="spinner hidden" id="downloadSpinner"></div>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="workspace">
+      
+      <!-- Empty State / Dropzone -->
+      <section class="empty-state-view" id="emptyState">
+        <div class="dropzone glass-panel" id="dropzone">
+          <div class="dropzone-art">
+            <div class="animated-icon">
+              <i class="fa-solid fa-file-pdf"></i>
+            </div>
+            <div class="drop-pulse"></div>
+          </div>
+          <h1 class="dropzone-title">Sube y organiza tus PDFs con <span class="gradient-text">Tacala</span></h1>
+          <p class="dropzone-subtitle">Arrastra y suelta tus archivos aquí, o presiona el botón para examinar tus documentos.</p>
+          
+          <div class="dropzone-buttons">
+            <button class="btn btn-hp btn-lg" id="btnHpScanMain">
+              <i class="fa-solid fa-print"></i>
+              <span>Escanear con HP 4103fdw</span>
+            </button>
+            <button class="btn btn-primary btn-lg" id="btnSelectPdfMain">
+              <i class="fa-solid fa-folder-open"></i>
+              <span>Seleccionar Archivos PDF</span>
+            </button>
+            <button class="btn btn-secondary btn-lg" id="btnStartBlankDoc">
+              <i class="fa-solid fa-file-circle-plus"></i>
+              <span>Comenzar con Hoja en Blanco</span>
+            </button>
+          </div>
+
+          <div class="features-pill-row">
+            <span class="pill"><i class="fa-solid fa-shield-halved"></i> 100% Seguro (Sin subir a servidores)</span>
+            <span class="pill"><i class="fa-solid fa-arrow-down-up-across-line"></i> Reordenar Drag & Drop</span>
+            <span class="pill"><i class="fa-solid fa-pen-nib"></i> Editor & Anotaciones</span>
+            <span class="pill"><i class="fa-solid fa-rotate"></i> Rotación por Hoja</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Document Workbench (Visible when pages are loaded) -->
+      <section class="workbench-view hidden" id="workbenchView">
+        
+        <!-- Workbench Toolbar -->
+        <div class="workbench-bar glass-panel">
+          <div class="bar-left">
+            <span class="pages-count-chip" id="pagesCountChip">
+              <i class="fa-solid fa-layer-group"></i>
+              <strong id="chipCurrentCount">0</strong> páginas
+            </span>
+            <div class="bar-divider"></div>
+            <button class="tool-btn" id="btnRotateAllCw" title="Rotar todas las páginas 90°">
+              <i class="fa-solid fa-rotate-right"></i>
+              <span>Rotar todo</span>
+            </button>
+            <button class="tool-btn btn-hp-subtle" id="btnWorkbenchScanMore" title="Escanear y agregar más hojas al documento actual">
+              <i class="fa-solid fa-print"></i>
+              <span>Escanear más hojas</span>
+            </button>
+            <button class="tool-btn" id="btnQuickAddBlank" title="Añadir hoja al final">
+              <i class="fa-solid fa-plus"></i>
+              <span>Añadir hoja en blanco</span>
+            </button>
+          </div>
+
+          <div class="bar-right">
+            <span class="tip-text"><i class="fa-solid fa-keyboard"></i> Mantén <strong>Ctrl + Click</strong> para seleccionar varias hojas</span>
+            <div class="bar-divider"></div>
+            <div class="zoom-controls">
+              <button class="icon-tool-btn" id="btnZoomOut" title="Miniaturas más pequeñas">
+                <i class="fa-solid fa-magnifying-glass-minus"></i>
+              </button>
+              <button class="icon-tool-btn" id="btnZoomIn" title="Miniaturas más grandes">
+                <i class="fa-solid fa-magnifying-glass-plus"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Floating Bulk Action Bar (Visible when 1+ pages selected with Ctrl+Click) -->
+        <div class="bulk-action-bar glass-panel hidden" id="bulkActionBar">
+          <div class="bulk-info">
+            <div class="bulk-badge"><i class="fa-solid fa-check"></i></div>
+            <span id="bulkCountText"><strong>0</strong> hojas seleccionadas</span>
+            <span class="bulk-subtext">(Mueve una para mover todas en grupo)</span>
+          </div>
+          <div class="bulk-actions">
+            <button class="btn btn-sm btn-secondary" id="btnBulkRotate" title="Rotar 90° las hojas seleccionadas">
+              <i class="fa-solid fa-rotate-right"></i>
+              <span>Rotar seleccionadas</span>
+            </button>
+            <button class="btn btn-sm btn-danger-outline" id="btnBulkDelete" title="Eliminar las hojas seleccionadas">
+              <i class="fa-solid fa-trash-can"></i>
+              <span>Eliminar seleccionadas</span>
+            </button>
+            <button class="btn btn-sm btn-secondary" id="btnBulkSelectAll" title="Seleccionar todas las hojas">
+              <i class="fa-solid fa-check-double"></i>
+              <span>Todas</span>
+            </button>
+            <button class="btn btn-sm btn-secondary" id="btnBulkDeselectAll" title="Deseleccionar todas">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- Pages Grid -->
+        <div class="pages-grid" id="pagesGrid">
+          <!-- Page cards will be injected here dynamically -->
+        </div>
+
+      </section>
+
+    </main>
+  </div>
+
+  <!-- MODAL: Editor de Hoja (Lienzo / Anotaciones / Dibujo / Texto) -->
+  <div class="modal-backdrop hidden" id="editorModal">
+    <div class="modal-dialog editor-modal-dialog glass-panel">
+      
+      <!-- Editor Header -->
+      <div class="modal-header">
+        <div class="editor-title-box">
+          <div class="editor-icon"><i class="fa-solid fa-pen-ruler"></i></div>
+          <div>
+            <h2 class="modal-title">Editando Hoja <span id="modalPageNumberBadge">#1</span></h2>
+            <p class="modal-desc">Dibuja, resalta, agrega texto y personaliza el contenido de esta página</p>
+          </div>
+        </div>
+        <button class="close-modal-btn" id="btnCloseEditor" title="Cerrar sin guardar">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <!-- Editor Body with Canvas & Tools -->
+      <div class="editor-body">
+        
+        <!-- Left Tool Palette -->
+        <aside class="editor-tools-panel">
+          <div class="tool-group">
+            <span class="group-label">Herramienta</span>
+            <div class="tools-grid">
+              <button class="tool-tile active" data-tool="pen" title="Lápiz / Dibujo libre">
+                <i class="fa-solid fa-pencil"></i>
+                <span>Pluma</span>
+              </button>
+              <button class="tool-tile" data-tool="highlighter" title="Resaltador">
+                <i class="fa-solid fa-highlighter"></i>
+                <span>Resaltar</span>
+              </button>
+              <button class="tool-tile" data-tool="text" title="Insertar Texto">
+                <i class="fa-solid fa-font"></i>
+                <span>Texto</span>
+              </button>
+              <button class="tool-tile" data-tool="eraser" title="Borrador">
+                <i class="fa-solid fa-eraser"></i>
+                <span>Borrar</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="tool-group">
+            <span class="group-label">Color</span>
+            <div class="color-palette">
+              <button class="color-swatch active" data-color="#1e293b" style="background: #1e293b;"></button>
+              <button class="color-swatch" data-color="#ef4444" style="background: #ef4444;"></button>
+              <button class="color-swatch" data-color="#f59e0b" style="background: #f59e0b;"></button>
+              <button class="color-swatch" data-color="#10b981" style="background: #10b981;"></button>
+              <button class="color-swatch" data-color="#3b82f6" style="background: #3b82f6;"></button>
+              <button class="color-swatch" data-color="#8b5cf6" style="background: #8b5cf6;"></button>
+              <button class="color-swatch" data-color="#ffffff" style="background: #ffffff; border: 1px solid #64748b;"></button>
+              <input type="color" id="customColorPicker" value="#8b5cf6" class="custom-color-input" title="Color personalizado">
+            </div>
+          </div>
+
+          <div class="tool-group">
+            <div class="label-row">
+              <span class="group-label">Grosor de trazo</span>
+              <span class="stroke-val" id="strokeSizeVal">4px</span>
+            </div>
+            <input type="range" id="strokeSizeRange" min="1" max="40" value="4" class="range-slider">
+          </div>
+
+          <div class="tool-group" id="textOptionsGroup" style="display: none;">
+            <span class="group-label">Tamaño de Texto</span>
+            <select id="fontSizeSelect" class="form-select">
+              <option value="16">16px - Pequeño</option>
+              <option value="24" selected>24px - Mediano</option>
+              <option value="36">36px - Grande</option>
+              <option value="48">48px - Titular</option>
+            </select>
+          </div>
+
+          <div class="tool-group actions-group">
+            <button class="btn btn-secondary btn-block" id="btnUndoCanvas" title="Deshacer trazo">
+              <i class="fa-solid fa-rotate-left"></i>
+              <span>Deshacer</span>
+            </button>
+            <button class="btn btn-secondary btn-block" id="btnClearCanvas" title="Limpiar todos los dibujos">
+              <i class="fa-solid fa-trash-can"></i>
+              <span>Limpiar todo</span>
+            </button>
+          </div>
+        </aside>
+
+        <!-- Canvas Viewport Center -->
+        <div class="editor-viewport" id="editorViewport">
+          <div class="canvas-wrapper" id="canvasWrapper">
+            <!-- Background canvas (renders the original page) -->
+            <canvas id="bgCanvas"></canvas>
+            <!-- Foreground canvas (interactive drawing & edits) -->
+            <canvas id="drawCanvas"></canvas>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Editor Footer -->
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCancelEditor">Cancelar</button>
+        <button class="btn btn-primary" id="btnSaveEditor">
+          <i class="fa-solid fa-check"></i>
+          <span>Guardar Cambios en la Hoja</span>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- MODAL: Configurar Nueva Hoja en Blanco -->
+  <div class="modal-backdrop hidden" id="blankPageModal">
+    <div class="modal-dialog small-dialog glass-panel">
+      <div class="modal-header">
+        <div class="editor-title-box">
+          <div class="editor-icon"><i class="fa-regular fa-file"></i></div>
+          <div>
+            <h2 class="modal-title">Nueva Hoja en Blanco</h2>
+            <p class="modal-desc">Elige el formato y estilo de la hoja</p>
+          </div>
+        </div>
+        <button class="close-modal-btn" id="btnCloseBlankModal">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="modal-form-body">
+        <div class="form-group">
+          <label class="form-label">Estilo de Hoja</label>
+          <div class="style-cards-grid">
+            <label class="style-card active">
+              <input type="radio" name="pagePattern" value="blank" checked hidden>
+              <div class="pattern-preview blank-preview"></div>
+              <span>Blanca</span>
+            </label>
+            <label class="style-card">
+              <input type="radio" name="pagePattern" value="lined" hidden>
+              <div class="pattern-preview lined-preview"></div>
+              <span>Rayada</span>
+            </label>
+            <label class="style-card">
+              <input type="radio" name="pagePattern" value="grid" hidden>
+              <div class="pattern-preview grid-preview"></div>
+              <span>Cuadrícula</span>
+            </label>
+            <label class="style-card">
+              <input type="radio" name="pagePattern" value="dark" hidden>
+              <div class="pattern-preview dark-preview"></div>
+              <span>Oscura</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="pageOrientationSelect">Orientación</label>
+          <select id="pageOrientationSelect" class="form-select">
+            <option value="portrait" selected>Vertical (A4: 595 x 842 pt)</option>
+            <option value="landscape">Horizontal (A4: 842 x 595 pt)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="pageInsertPositionSelect">Posición de inserción</label>
+          <select id="pageInsertPositionSelect" class="form-select">
+            <option value="end" selected>Al final del documento</option>
+            <option value="start">Al principio del documento</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCancelBlankModal">Cancelar</button>
+        <button class="btn btn-primary" id="btnConfirmAddBlank">
+          <i class="fa-solid fa-plus"></i>
+          <span>Insertar Hoja</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Confirmar Eliminación Total -->
+  <div class="modal-backdrop hidden" id="confirmClearModal">
+    <div class="modal-dialog small-dialog glass-panel">
+      <div class="modal-header">
+        <div class="editor-title-box">
+          <div class="editor-icon danger-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+          <div>
+            <h2 class="modal-title">¿Eliminar PDF completo?</h2>
+            <p class="modal-desc">Esta acción eliminará todas las hojas y reiniciará el proyecto</p>
+          </div>
+        </div>
+        <button class="close-modal-btn" id="btnCloseClearModal">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body-text">
+        Se perderán los cambios y las hojas que hayas cargado y editado en esta sesión. ¿Deseas continuar?
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCancelClear">Cancelar</button>
+        <button class="btn btn-danger" id="btnConfirmClear">
+          <i class="fa-solid fa-trash-can"></i>
+          <span>Sí, eliminar todo</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Escáner HP LaserJet Pro MFP 4103fdw -->
+  <div class="modal-backdrop hidden" id="hpScanModal">
+    <div class="modal-dialog hp-dialog glass-panel">
+      <div class="modal-header">
+        <div class="editor-title-box">
+          <div class="editor-icon hp-icon"><i class="fa-solid fa-print"></i></div>
+          <div>
+            <h2 class="modal-title">Escanear con HP LaserJet Pro MFP 4103fdw</h2>
+            <p class="modal-desc">Escaneo directo por red local (eSCL) o carpeta compartida</p>
+          </div>
+        </div>
+        <button class="close-modal-btn" id="btnCloseHpModal">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="modal-form-body">
+        <!-- Connection Config & Status -->
+        <div class="form-group hp-conn-box">
+          <label class="form-label" for="hpPrinterIp">Dirección IP de la Impresora HP en tu red</label>
+          <div class="hp-ip-row">
+            <div class="input-with-icon">
+              <i class="fa-solid fa-network-wired"></i>
+              <input type="text" id="hpPrinterIp" class="form-input" placeholder="Ejemplo: 192.168.1.50" value="192.168.1.50">
+            </div>
+            <button class="btn btn-secondary" id="btnTestHpConnection" title="Verificar que responda en la red">
+              <i class="fa-solid fa-bolt"></i>
+              <span>Probar Conexión</span>
+            </button>
+          </div>
+          <div class="hp-status-feedback" id="hpStatusFeedback">
+            <span class="status-dot dot-idle"></span>
+            <span id="hpStatusText">Ingresa la IP de tu HP (puedes verla en la pantalla táctil de la impresora).</span>
+          </div>
+        </div>
+
+        <!-- Scan Options Grid -->
+        <div class="form-grid-2cols">
+          <!-- Input Source -->
+          <div class="form-group">
+            <label class="form-label">Origen del Documento</label>
+            <div class="source-toggle-group">
+              <label class="source-card active" id="cardSourceAdf">
+                <input type="radio" name="hpSource" value="Feeder" checked hidden>
+                <i class="fa-solid fa-bars-staggered"></i>
+                <div>
+                  <strong>Alimentador (ADF)</strong>
+                  <small>Pila de varias hojas</small>
+                </div>
+              </label>
+              <label class="source-card" id="cardSourcePlaten">
+                <input type="radio" name="hpSource" value="Platen" hidden>
+                <i class="fa-regular fa-square"></i>
+                <div>
+                  <strong>Cama Plana</strong>
+                  <small>Cristal (1 hoja)</small>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Color Mode -->
+          <div class="form-group">
+            <label class="form-label">Modo de Color</label>
+            <div class="source-toggle-group">
+              <label class="source-card active" id="cardColorRgb">
+                <input type="radio" name="hpColor" value="RGB24" checked hidden>
+                <i class="fa-solid fa-palette"></i>
+                <div>
+                  <strong>Color</strong>
+                  <small>RGB a todo color</small>
+                </div>
+              </label>
+              <label class="source-card" id="cardColorGray">
+                <input type="radio" name="hpColor" value="Grayscale8" hidden>
+                <i class="fa-solid fa-circle-half-stroke"></i>
+                <div>
+                  <strong>Escala de Grises</strong>
+                  <small>Blanco y negro rápido</small>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-grid-2cols">
+          <!-- Resolution -->
+          <div class="form-group">
+            <label class="form-label" for="hpResolutionSelect">Resolución</label>
+            <select id="hpResolutionSelect" class="form-select">
+              <option value="150">150 DPI - Escaneo Rápido</option>
+              <option value="300" selected>300 DPI - Estándar Oficina (Recomendado)</option>
+              <option value="600">600 DPI - Alta Calidad</option>
+            </select>
+          </div>
+
+          <!-- Duplex option for ADF -->
+          <div class="form-group checkbox-group-wrap">
+            <div class="label-row">
+              <label class="form-label" for="hpDuplexCheck">Escaneo a Doble Cara (Dúplex)</label>
+              <span class="badge-persistent" id="duplexStateBadge">Desactivado</span>
+            </div>
+            <label class="duplex-toggle-switch">
+              <input type="checkbox" id="hpDuplexCheck">
+              <span class="switch-slider"></span>
+              <span class="switch-text">Escanear anverso y reverso automático (ADF)</span>
+            </label>
+            <small class="form-hint"><i class="fa-solid fa-floppy-disk"></i> Tu preferencia se guardará automáticamente para futuros escaneos.</small>
+          </div>
+        </div>
+
+        <!-- Scanning progress banner (hidden by default) -->
+        <div class="scan-progress-box hidden" id="hpScanProgressBox">
+          <div class="scanner-laser-bar"></div>
+          <div class="progress-info">
+            <div class="spinner"></div>
+            <div>
+              <strong id="hpScanProgressTitle">La impresora HP está escaneando...</strong>
+              <p id="hpScanProgressSubtitle">Espera a que el alimentador termine de procesar las hojas.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Folder Scan Quick Drawer -->
+        <div class="folder-scan-drawer">
+          <div class="drawer-header" id="btnToggleFolderScans">
+            <span><i class="fa-solid fa-folder-open"></i> ¿Escaneaste directo desde la pantalla de la HP?</span>
+            <button class="btn btn-sm btn-secondary" id="btnRefreshFolderScans">
+              <i class="fa-solid fa-rotate"></i> Consultar carpeta
+            </button>
+          </div>
+          <div class="folder-files-list hidden" id="folderFilesList">
+            <!-- Discovered files will appear here -->
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCancelHpScan">Cerrar</button>
+        <button class="btn btn-secondary" id="btnScanWia" title="Usar el driver de Windows WIA si la HP está conectada a esta PC">
+          <i class="fa-brands fa-windows"></i>
+          <span>Driver Windows</span>
+        </button>
+        <button class="btn btn-hp" id="btnStartHpScan">
+          <i class="fa-solid fa-play"></i>
+          <span>Iniciar Escaneo en HP</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Enderezar Hoja Chueca (Deskew) -->
+  <div class="modal-backdrop hidden" id="deskewModal">
+    <div class="modal-dialog deskew-modal-dialog glass-panel">
+      <div class="modal-header">
+        <div class="editor-title-box">
+          <div class="editor-icon" style="background:rgba(6,182,212,0.2);color:#06b6d4;border-color:rgba(6,182,212,0.35);">
+            <i class="fa-solid fa-compass-drafting"></i>
+          </div>
+          <div>
+            <h2 class="modal-title">Enderezar Hoja <span id="deskewPageBadge">#1</span></h2>
+            <p class="modal-desc">Corrige la inclinación si la hoja salió chueca al escanear</p>
+          </div>
+        </div>
+        <button class="close-modal-btn" id="btnCloseDeskew">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="deskew-body">
+        <!-- Controls Toolbar -->
+        <div class="deskew-controls glass-panel">
+          <div class="deskew-angle-row">
+            <span class="group-label">Ángulo de ajuste fino</span>
+            <span class="deskew-angle-val" id="deskewAngleVal">0.0°</span>
+          </div>
+
+          <div class="slider-wrapper">
+            <input type="range" id="deskewSlider" min="-15" max="15" step="0.2" value="0" class="range-slider">
+            <div class="slider-ticks">
+              <span>-15°</span>
+              <span>-10°</span>
+              <span>-5°</span>
+              <span>0°</span>
+              <span>+5°</span>
+              <span>+10°</span>
+              <span>+15°</span>
+            </div>
+          </div>
+
+          <div class="quick-angle-buttons">
+            <button class="quick-ang-btn" data-angle="-5">-5°</button>
+            <button class="quick-ang-btn" data-angle="-1">-1°</button>
+            <button class="quick-ang-btn" data-angle="-0.4">-0.4°</button>
+            <button class="quick-ang-btn reset-btn" data-angle="0">0° (Reset)</button>
+            <button class="quick-ang-btn" data-angle="0.4">+0.4°</button>
+            <button class="quick-ang-btn" data-angle="1">+1°</button>
+            <button class="quick-ang-btn" data-angle="5">+5°</button>
+          </div>
+
+          <div class="deskew-toggles">
+            <label class="custom-checkbox">
+              <input type="checkbox" id="deskewGridToggle" checked>
+              <span class="checkmark"></span>
+              <span>Mostrar cuadrícula de alineación recta</span>
+            </label>
+            <label class="custom-checkbox">
+              <input type="checkbox" id="deskewCropToggle" checked>
+              <span class="checkmark"></span>
+              <span>Auto-recortar bordes vacíos</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Canvas Viewport with Grid Overlay -->
+        <div class="deskew-viewport" id="deskewViewport">
+          <div class="deskew-canvas-wrapper" id="deskewCanvasWrapper">
+            <canvas id="deskewCanvas"></canvas>
+            <div class="alignment-grid-overlay" id="alignmentGridOverlay"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCancelDeskew">Cancelar</button>
+        <button class="btn btn-primary" id="btnApplyDeskew">
+          <i class="fa-solid fa-check"></i>
+          <span>Aplicar Enderezado</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- App Logic -->
+  <script src="app.js"></script>
+</body>
+</html>

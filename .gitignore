@@ -1,0 +1,10 @@
+# Ignorar archivos temporales y descargas personales
+escaneos/*
+!escaneos/.gitkeep
+
+documentos_guardados/*
+!documentos_guardados/.gitkeep
+
+node_modules/
+.DS_Store
+Thumbs.db
