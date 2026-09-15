@@ -4,9 +4,9 @@
  * native eSCL scanning for HP LaserJet Pro MFP 4103fdw (with duplex support).
  */
 
-// Initialize PDF.js worker
+// Initialize PDF.js worker (local offline vendor with fallback)
 if (typeof pdfjsLib !== 'undefined') {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 }
 
 (function () {
@@ -263,13 +263,16 @@ if (typeof pdfjsLib !== 'undefined') {
         const arrayBuffer = await file.arrayBuffer();
         const docId = 'doc_' + Math.random().toString(36).substring(2, 9);
 
+        // Clone the buffer so PDF.js Web Worker does not detach our copy for PDFLib
+        const pdfLibBytes = new Uint8Array(arrayBuffer.slice(0));
+
         // Render pages with PDF.js
         const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
         const pdfJsDoc = await loadingTask.promise;
 
         state.sourceDocuments.set(docId, {
           name: file.name,
-          bytes: new Uint8Array(arrayBuffer),
+          bytes: pdfLibBytes,
           pdfJsDoc: pdfJsDoc
         });
 
@@ -1207,9 +1210,25 @@ if (typeof pdfjsLib !== 'undefined') {
     DOM.btnDownloadPdf.addEventListener('click', downloadPdfFile);
   }
 
+  function dataUriToUint8Array(dataUri) {
+    const commaIdx = dataUri.indexOf(',');
+    const base64 = commaIdx >= 0 ? dataUri.slice(commaIdx + 1) : dataUri;
+    const binaryStr = atob(base64);
+    const len = binaryStr.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    return bytes;
+  }
+
   async function generateMergedPdfBytes() {
     if (state.pages.length === 0) {
       throw new Error('No hay hojas en el documento');
+    }
+
+    if (typeof PDFLib === 'undefined' || !PDFLib.PDFDocument) {
+      throw new Error('La librería PDF-Lib no está lista. Por favor recarga la página.');
     }
 
     const { PDFDocument, degrees } = PDFLib;
@@ -1219,52 +1238,73 @@ if (typeof pdfjsLib !== 'undefined') {
     const loadedPdfLibDocs = new Map();
 
     for (const page of state.pages) {
-      if (page.isEdited || page.canvasDataUrl || page.type === 'image') {
-        // Embed canvas image
-        const imgUrl = page.canvasDataUrl || page.thumbnailUrl;
-        const imgBytes = await fetch(imgUrl).then((r) => r.arrayBuffer());
+      try {
+        if (page.isEdited || page.canvasDataUrl || page.type === 'image') {
+          // Embed image (from scan, blank page, or edit)
+          const imgUrl = page.canvasDataUrl || page.thumbnailUrl;
+          const imgBytes = dataUriToUint8Array(imgUrl);
 
-        let embeddedImg;
-        if (imgUrl.startsWith('data:image/png')) {
-          embeddedImg = await mergedDoc.embedPng(imgBytes);
-        } else {
-          embeddedImg = await mergedDoc.embedJpg(imgBytes);
-        }
-
-        const newPdfPage = mergedDoc.addPage([page.width, page.height]);
-        newPdfPage.drawImage(embeddedImg, {
-          x: 0,
-          y: 0,
-          width: page.width,
-          height: page.height
-        });
-
-        if (page.rotation !== 0) {
-          newPdfPage.setRotation(degrees(page.rotation));
-        }
-      } else {
-        // Copy original vector PDF page
-        const sourceInfo = state.sourceDocuments.get(page.sourceDocId);
-        if (sourceInfo) {
-          if (!loadedPdfLibDocs.has(page.sourceDocId)) {
-            const pdfDoc = await PDFDocument.load(sourceInfo.bytes);
-            loadedPdfLibDocs.set(page.sourceDocId, pdfDoc);
+          let embeddedImg;
+          if (imgUrl.startsWith('data:image/png')) {
+            embeddedImg = await mergedDoc.embedPng(imgBytes);
+          } else {
+            embeddedImg = await mergedDoc.embedJpg(imgBytes);
           }
 
-          const pdfDoc = loadedPdfLibDocs.get(page.sourceDocId);
-          const [copiedPage] = await mergedDoc.copyPages(pdfDoc, [page.sourcePageIndex]);
+          const newPdfPage = mergedDoc.addPage([page.width, page.height]);
+          newPdfPage.drawImage(embeddedImg, {
+            x: 0,
+            y: 0,
+            width: page.width,
+            height: page.height
+          });
 
           if (page.rotation !== 0) {
-            const currentRot = copiedPage.getRotation().angle || 0;
-            copiedPage.setRotation(degrees((currentRot + page.rotation) % 360));
+            newPdfPage.setRotation(degrees(page.rotation));
           }
+        } else {
+          // Copy original vector PDF page
+          const sourceInfo = state.sourceDocuments.get(page.sourceDocId);
+          if (sourceInfo) {
+            if (!loadedPdfLibDocs.has(page.sourceDocId)) {
+              const pdfDoc = await PDFDocument.load(sourceInfo.bytes);
+              loadedPdfLibDocs.set(page.sourceDocId, pdfDoc);
+            }
 
-          mergedDoc.addPage(copiedPage);
+            const pdfDoc = loadedPdfLibDocs.get(page.sourceDocId);
+            const [copiedPage] = await mergedDoc.copyPages(pdfDoc, [page.sourcePageIndex]);
+
+            if (page.rotation !== 0) {
+              const currentRot = copiedPage.getRotation().angle || 0;
+              copiedPage.setRotation(degrees((currentRot + page.rotation) % 360));
+            }
+
+            mergedDoc.addPage(copiedPage);
+          }
         }
+      } catch (pageErr) {
+        console.error('Error procesando hoja para PDF:', pageErr);
+        throw new Error(`Error al procesar hoja: ${pageErr.message}`);
       }
     }
 
     return await mergedDoc.save();
+  }
+
+  async function saveToServerFolder(pdfBytes, filename) {
+    try {
+      await fetch('/api/save-document', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/pdf',
+          'x-filename': filename
+        },
+        body: pdfBytes
+      });
+      console.log(`[Tacala] Documento guardado automáticamente en carpeta local del servidor: ${filename}`);
+    } catch (e) {
+      console.warn('Aviso: no se pudo sincronizar copia con servidor local:', e);
+    }
   }
 
   async function saveDirectlyToPc() {
@@ -1273,19 +1313,26 @@ if (typeof pdfjsLib !== 'undefined') {
       return;
     }
 
+    DOM.downloadSpinner.classList.remove('hidden');
+
     try {
       showToast('Generando PDF para guardar...', 'info', 2000);
       const pdfBytes = await generateMergedPdfBytes();
+      const filename = `Tacala_Documento_${new Date().toISOString().slice(0, 10)}.pdf`;
+
+      // 1. Guardar copia en el servidor local (documentos_guardados/)
+      await saveToServerFolder(pdfBytes, filename);
+
       const blob = new Blob([pdfBytes], { type: 'application/pdf' });
 
-      // Check for Native File System Access API (allows picking any PC folder directly)
+      // 2. Si el navegador soporta el selector nativo de Windows (File System Access API)
       if ('showSaveFilePicker' in window) {
         try {
           const handle = await window.showSaveFilePicker({
-            suggestedName: `Tacala_Documento_${new Date().toISOString().slice(0, 10)}.pdf`,
+            suggestedName: filename,
             types: [
               {
-                description: 'Documento PDF',
+                description: 'Documento PDF (*.pdf)',
                 accept: { 'application/pdf': ['.pdf'] }
               }
             ]
@@ -1298,18 +1345,19 @@ if (typeof pdfjsLib !== 'undefined') {
           showToast('¡Documento guardado directamente en tu PC con éxito!', 'success', 4000);
           return;
         } catch (pickerErr) {
-          // If user cancelled the picker dialog, do nothing
           if (pickerErr.name === 'AbortError') return;
-          console.warn('File picker error, falling back to download:', pickerErr);
+          console.warn('File picker error, falling back to direct download:', pickerErr);
         }
       }
 
-      // Fallback if browser doesn't support File System Access
-      triggerBrowserDownload(blob);
-      showToast('Documento guardado en tu equipo', 'success', 3500);
+      // 3. Fallback: descarga directa al equipo
+      triggerBrowserDownload(blob, filename);
+      showToast('¡Documento PDF guardado en tu equipo!', 'success', 4000);
     } catch (err) {
       console.error('Error saving PDF:', err);
-      showToast(`Error al guardar: ${err.message}`, 'danger');
+      showToast(`Error al guardar PDF: ${err.message}`, 'danger', 5000);
+    } finally {
+      DOM.downloadSpinner.classList.add('hidden');
     }
   }
 
@@ -1324,29 +1372,35 @@ if (typeof pdfjsLib !== 'undefined') {
 
     try {
       const pdfBytes = await generateMergedPdfBytes();
+      const filename = `Tacala_Documento_${new Date().toISOString().slice(0, 10)}.pdf`;
+
+      // Guardar copia en servidor también
+      await saveToServerFolder(pdfBytes, filename);
+
       const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-      triggerBrowserDownload(blob);
+      triggerBrowserDownload(blob, filename);
       showToast('¡Descarga completada con éxito!', 'success');
     } catch (err) {
       console.error('Error downloading PDF:', err);
-      showToast(`Error: ${err.message}`, 'danger');
+      showToast(`Error al descargar: ${err.message}`, 'danger');
     } finally {
       DOM.downloadBtnText.textContent = 'Descargar';
       DOM.downloadSpinner.classList.add('hidden');
     }
   }
 
-  function triggerBrowserDownload(blob) {
+  function triggerBrowserDownload(blob, filename) {
+    const fn = filename || `Tacala_Documento_${new Date().toISOString().slice(0, 10)}.pdf`;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Tacala_Documento_${new Date().toISOString().slice(0, 10)}.pdf`;
+    a.download = fn;
     document.body.appendChild(a);
     a.click();
     setTimeout(() => {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    }, 200);
+    }, 300);
   }
 
   // ==========================================================================

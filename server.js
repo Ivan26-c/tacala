@@ -149,6 +149,7 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
+  <pwg:InputSource>${actualSource}</pwg:InputSource>
   <scan:InputSource>${actualSource}</scan:InputSource>
   <scan:ColorMode>${colorMode}</scan:ColorMode>
   <scan:XResolution>${resolution}</scan:XResolution>
@@ -187,51 +188,76 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
     jobPath = new URL(locationHeader).pathname;
   }
 
-  // 2. Poll & Download Scanned Pages
+  // 2. Poll & Download Scanned Pages with Duplex Retry Loop
   const scannedPages = [];
-  const maxPages = source === 'Feeder' ? 50 : 1; // Feeder may have multiple pages
+  const maxPages = source === 'Feeder' ? 60 : 1;
 
+  let consecutive404 = 0;
   for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-    // Wait slightly for document to process
-    await new Promise((r) => setTimeout(r, 1200));
+    let gotPage = false;
+    let retries = 0;
+    const maxRetriesForPage = pageNum === 1 ? 20 : 15;
 
-    const docOptions = {
-      protocol: isHttps ? 'https:' : 'http:',
-      hostname: cleanIp,
-      port: port,
-      path: `${jobPath}/NextDocument`,
-      method: 'GET',
-      rejectUnauthorized: false
-    };
+    while (retries < maxRetriesForPage) {
+      await new Promise((r) => setTimeout(r, 1200));
 
-    try {
-      const docRes = await httpRequest(docOptions);
+      const docOptions = {
+        protocol: isHttps ? 'https:' : 'http:',
+        hostname: cleanIp,
+        port: port,
+        path: `${jobPath}/NextDocument`,
+        method: 'GET',
+        rejectUnauthorized: false
+      };
 
-      if (docRes.statusCode === 200 && docRes.data.length > 0) {
-        const contentType = docRes.headers['content-type'] || 'image/jpeg';
-        const base64Data = docRes.data.toString('base64');
-        const dataUrl = `data:${contentType};base64,${base64Data}`;
+      try {
+        const docRes = await httpRequest(docOptions);
 
-        // Also save a copy to the escaneos directory
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const filename = `hp4103_${timestamp}_pag${pageNum}.jpg`;
-        fs.writeFileSync(path.join(SCANS_DIR, filename), docRes.data);
+        if (docRes.statusCode === 200 && docRes.data.length > 0) {
+          const contentType = docRes.headers['content-type'] || 'image/jpeg';
+          const base64Data = docRes.data.toString('base64');
+          const dataUrl = `data:${contentType};base64,${base64Data}`;
 
-        scannedPages.push({
-          dataUrl: dataUrl,
-          type: contentType.includes('pdf') ? 'pdf' : 'image',
-          filename: filename
-        });
+          // Also save a copy to the escaneos directory
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const filename = `hp4103_${timestamp}_cara${pageNum}.jpg`;
+          fs.writeFileSync(path.join(SCANS_DIR, filename), docRes.data);
 
-        if (source === 'Platen') break; // Platen only has 1 page
-      } else if (docRes.statusCode === 404 || docRes.statusCode === 503) {
-        // Feeder is empty, no more pages
-        break;
+          scannedPages.push({
+            dataUrl: dataUrl,
+            type: 'image',
+            filename: filename
+          });
+
+          console.log(`[Tacala] Cara ${pageNum} escaneada y recibida (${Math.round(docRes.data.length / 1024)} KB)`);
+          gotPage = true;
+          consecutive404 = 0;
+          break;
+        } else if (docRes.statusCode === 503) {
+          // 503 = Impresora volteando la hoja o procesando la siguiente cara!
+          console.log(`[Tacala] Procesando cara ${pageNum} (impresora volteando hoja - 503)... esperando (${retries + 1})`);
+          retries++;
+          continue;
+        } else if (docRes.statusCode === 404) {
+          consecutive404++;
+          if (scannedPages.length > 0 && consecutive404 >= 2) {
+            break;
+          }
+          retries++;
+          continue;
+        } else {
+          retries++;
+        }
+      } catch (err) {
+        retries++;
       }
-    } catch (err) {
-      if (pageNum > 1) break; // End of ADF pages
-      throw err;
     }
+
+    if (!gotPage) {
+      break;
+    }
+
+    if (source === 'Platen') break;
   }
 
   // 3. Delete / Finish scan job

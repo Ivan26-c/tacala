@@ -119,6 +119,7 @@ while ($listener.IsListening) {
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
+  <pwg:InputSource>$source</pwg:InputSource>
   <scan:InputSource>$source</scan:InputSource>
   <scan:ColorMode>$color</scan:ColorMode>
   <scan:XResolution>$resDpi</scan:XResolution>
@@ -147,49 +148,72 @@ while ($listener.IsListening) {
 
             if (-not $location) { throw "No se recibio identificador del trabajo de escaneo de la impresora." }
 
-            # Bucle para descargar TODAS las caras escaneadas (anverso, reverso y hojas siguientes del alimentador)
+            # Bucle inteligente para descargar TODAS las caras escaneadas
+            # En duplex, la impresora invierte la hoja mecanicamente y responde 503 (ocupada).
+            # Reintentamos en 503 hasta que la siguiente cara este lista.
             $pagesList = @()
             $maxPages = if ($source -eq "Feeder") { 60 } else { 1 }
             $docBaseUrl = if ($location.StartsWith("http")) { "$location/NextDocument" } else { "http://$ip$location/NextDocument" }
 
+            $consecutive404 = 0
             for ($pageNum = 1; $pageNum -le $maxPages; $pageNum++) {
-                Start-Sleep -Milliseconds 1200
-                try {
-                    $docReq = [System.Net.HttpWebRequest]::Create($docBaseUrl)
-                    $docReq.Timeout = 25000
-                    $docRes = $docReq.GetResponse()
+                $gotPage = $false
+                $retries = 0
+                $maxRetriesForPage = if ($pageNum -eq 1) { 20 } else { 15 }
 
-                    $statusCode = [int]$docRes.StatusCode
-                    if ($statusCode -eq 200) {
-                        $ms = New-Object System.IO.MemoryStream
-                        $docRes.GetResponseStream().CopyTo($ms)
-                        $imgBytes = $ms.ToArray()
-                        $docRes.Close()
+                while ($retries -lt $maxRetriesForPage) {
+                    Start-Sleep -Milliseconds 1200
+                    try {
+                        $docReq = [System.Net.HttpWebRequest]::Create($docBaseUrl)
+                        $docReq.Timeout = 25000
+                        $docRes = $docReq.GetResponse()
 
-                        if ($imgBytes.Length -gt 0) {
-                            $b64 = [Convert]::ToBase64String($imgBytes)
-                            $dataUrl = "data:image/jpeg;base64,$b64"
-                            $pagesList += @{ dataUrl = $dataUrl; type = "image"; filename = "hp4103_pagina_$pageNum.jpg" }
-                            Write-Host "  -> Cara $pageNum escaneada y recibida ($([math]::Round($imgBytes.Length/1024)) KB)" -ForegroundColor Green
+                        $statusCode = [int]$docRes.StatusCode
+                        if ($statusCode -eq 200) {
+                            $ms = New-Object System.IO.MemoryStream
+                            $docRes.GetResponseStream().CopyTo($ms)
+                            $imgBytes = $ms.ToArray()
+                            $docRes.Close()
+
+                            if ($imgBytes.Length -gt 0) {
+                                $b64 = [Convert]::ToBase64String($imgBytes)
+                                $dataUrl = "data:image/jpeg;base64,$b64"
+                                $pagesList += @{ dataUrl = $dataUrl; type = "image"; filename = "hp4103_cara_$pageNum.jpg" }
+                                Write-Host "  -> Cara $pageNum escaneada y recibida ($([math]::Round($imgBytes.Length/1024)) KB)" -ForegroundColor Green
+                                $gotPage = $true
+                                $consecutive404 = 0
+                                break
+                            }
+                        } else {
+                            $docRes.Close()
                         }
-
-                        if ($source -eq "Platen") { break }
-                    } else {
-                        $docRes.Close()
-                        break
-                    }
-                } catch [System.Net.WebException] {
-                    $webEx = $_.Exception
-                    if ($webEx.Response) {
-                        $code = [int]$webEx.Response.StatusCode
-                        # 404 Not Found o 503 indica que ya no hay mas caras o papel en el alimentador
-                        if ($code -eq 404 -or $code -eq 503) {
-                            break
+                    } catch [System.Net.WebException] {
+                        $webEx = $_.Exception
+                        if ($webEx.Response) {
+                            $code = [int]$webEx.Response.StatusCode
+                            if ($code -eq 503) {
+                                # 503 = Impresora volteando la hoja o escaneando la siguiente cara!
+                                Write-Host "  [HP 4103] Procesando cara $pageNum (impresora volteando hoja - 503)... esperando ($($retries+1))" -ForegroundColor Yellow
+                                $retries++
+                                continue
+                            } elseif ($code -eq 404) {
+                                $consecutive404++
+                                if ($pagesList.Count -gt 0 -and $consecutive404 -ge 2) {
+                                    break
+                                }
+                                $retries++
+                                continue
+                            }
                         }
+                        $retries++
                     }
-                    if ($pageNum -gt 1) { break }
-                    throw
                 }
+
+                if (-not $gotPage) {
+                    break
+                }
+
+                if ($source -eq "Platen") { break }
             }
 
             # Limpiar trabajo en la impresora
