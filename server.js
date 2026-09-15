@@ -126,9 +126,12 @@ async function testHpPrinter(printerIp) {
 }
 
 // Perform eSCL scan job on HP printer
-async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Platen', colorMode = 'RGB24', resolution = 300, duplex = false }) {
+async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder', colorMode = 'RGB24', resolution = 300, duplex = false }) {
   const cleanIp = ip.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   const isHttps = protocol === 'https' || port === 443;
+  const isDuplex = Boolean(duplex);
+  const actualSource = isDuplex ? 'Feeder' : (source || 'Feeder');
+  const duplexStr = isDuplex ? 'true' : 'false';
 
   // Calculate pixel dimensions for standard A4 at target DPI
   // A4 = 8.27 x 11.69 inches
@@ -146,12 +149,12 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Platen',
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <scan:InputSource>${source}</scan:InputSource>
+  <scan:InputSource>${actualSource}</scan:InputSource>
   <scan:ColorMode>${colorMode}</scan:ColorMode>
   <scan:XResolution>${resolution}</scan:XResolution>
   <scan:YResolution>${resolution}</scan:YResolution>
   <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
-  <scan:Duplex>${duplex ? 'true' : 'false'}</scan:Duplex>
+  <scan:Duplex>${duplexStr}</scan:Duplex>
 </scan:ScanSettings>`;
 
   // 1. Create Scan Job

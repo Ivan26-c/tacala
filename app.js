@@ -1,6 +1,7 @@
 /**
- * TACALA - Modern Client-Side PDF Studio & Editor
- * Uses PDF.js for ultra-sharp canvas rendering and PDF-Lib for high performance manipulation.
+ * TACALA - Modern Clean PDF Studio & Digitalizer
+ * PDF.js for crisp rendering, PDF-Lib for high performance manipulation,
+ * native eSCL scanning for HP LaserJet Pro MFP 4103fdw (with duplex support).
  */
 
 // Initialize PDF.js worker
@@ -16,7 +17,7 @@ if (typeof pdfjsLib !== 'undefined') {
   // ==========================================================================
   const state = {
     pages: [], // Array of Page objects
-    sourceDocuments: new Map(), // docId -> { name, bytes, pdfJsDoc, pdfLibDoc }
+    sourceDocuments: new Map(), // docId -> { name, bytes, pdfJsDoc }
     draggedIndex: null,
     selectedPageIds: new Set(),
     lastSelectedId: null,
@@ -30,9 +31,8 @@ if (typeof pdfjsLib !== 'undefined') {
     editor: {
       activePageId: null,
       tool: 'pen', // 'pen' | 'highlighter' | 'text' | 'eraser'
-      color: '#1e293b',
+      color: '#0f172a',
       strokeSize: 4,
-      fontSize: 24,
       isDrawing: false,
       history: [],
       historyStep: -1,
@@ -45,44 +45,39 @@ if (typeof pdfjsLib !== 'undefined') {
 
   // Standard A4 dimensions in PDF points (72 DPI)
   const A4_PORTRAIT = { width: 595.28, height: 841.89 };
-  const A4_LANDSCAPE = { width: 841.89, height: 595.28 };
 
   // ==========================================================================
   // DOM Elements
   // ==========================================================================
   const DOM = {
-    // Nav & General
-    navStatus: document.getElementById('navStatus'),
-    pageCountStatus: document.getElementById('pageCountStatus'),
+    // Inputs
     pdfFileInput: document.getElementById('pdfFileInput'),
     imageFileInput: document.getElementById('imageFileInput'),
+
+    // Navbar
+    btnOpenHpScan: document.getElementById('btnOpenHpScan'),
     btnUploadPdf: document.getElementById('btnUploadPdf'),
-    btnAddPageDropdown: document.getElementById('btnAddPageDropdown'),
-    addPageMenu: document.getElementById('addPageMenu'),
-    btnMenuBlankPage: document.getElementById('btnMenuBlankPage'),
-    btnMenuUploadImage: document.getElementById('btnMenuUploadImage'),
-    btnMenuAppendPdf: document.getElementById('btnMenuAppendPdf'),
-    btnClearAll: document.getElementById('btnClearAll'),
     btnSaveToFolder: document.getElementById('btnSaveToFolder'),
     btnDownloadPdf: document.getElementById('btnDownloadPdf'),
     downloadBtnText: document.getElementById('downloadBtnText'),
     downloadSpinner: document.getElementById('downloadSpinner'),
+    btnClearAll: document.getElementById('btnClearAll'),
 
-    // Views
+    // Empty state & Workspace
     emptyState: document.getElementById('emptyState'),
     dropzone: document.getElementById('dropzone'),
+    btnHpScanMain: document.getElementById('btnHpScanMain'),
     btnSelectPdfMain: document.getElementById('btnSelectPdfMain'),
-    btnStartBlankDoc: document.getElementById('btnStartBlankDoc'),
     workbenchView: document.getElementById('workbenchView'),
     pagesGrid: document.getElementById('pagesGrid'),
     chipCurrentCount: document.getElementById('chipCurrentCount'),
-    btnRotateAllCw: document.getElementById('btnRotateAllCw'),
     btnWorkbenchScanMore: document.getElementById('btnWorkbenchScanMore'),
     btnQuickAddBlank: document.getElementById('btnQuickAddBlank'),
+    btnRotateAllCw: document.getElementById('btnRotateAllCw'),
     btnZoomIn: document.getElementById('btnZoomIn'),
     btnZoomOut: document.getElementById('btnZoomOut'),
 
-    // Bulk Action Bar
+    // Floating Bulk Action Bar
     bulkActionBar: document.getElementById('bulkActionBar'),
     bulkCountText: document.getElementById('bulkCountText'),
     btnBulkRotate: document.getElementById('btnBulkRotate'),
@@ -90,16 +85,37 @@ if (typeof pdfjsLib !== 'undefined') {
     btnBulkSelectAll: document.getElementById('btnBulkSelectAll'),
     btnBulkDeselectAll: document.getElementById('btnBulkDeselectAll'),
 
+    // HP Scan Modal
+    hpScanModal: document.getElementById('hpScanModal'),
+    btnCloseHpModal: document.getElementById('btnCloseHpModal'),
+    btnCancelHpScan: document.getElementById('btnCancelHpScan'),
+    cardSourceAdf: document.getElementById('cardSourceAdf'),
+    cardSourcePlaten: document.getElementById('cardSourcePlaten'),
+    btnDuplexNo: document.getElementById('btnDuplexNo'),
+    btnDuplexYes: document.getElementById('btnDuplexYes'),
+    hpDuplexCheck: document.getElementById('hpDuplexCheck'),
+    duplexStateBadge: document.getElementById('duplexStateBadge'),
+    hpScanProgressBox: document.getElementById('hpScanProgressBox'),
+    hpScanProgressTitle: document.getElementById('hpScanProgressTitle'),
+    hpScanProgressSubtitle: document.getElementById('hpScanProgressSubtitle'),
+    btnToggleIpConfig: document.getElementById('btnToggleIpConfig'),
+    ipEditDrawer: document.getElementById('ipEditDrawer'),
+    displayCurrentIpText: document.getElementById('displayCurrentIpText'),
+    hpPrinterIp: document.getElementById('hpPrinterIp'),
+    btnTestHpConnection: document.getElementById('btnTestHpConnection'),
+    hpStatusFeedback: document.getElementById('hpStatusFeedback'),
+    hpStatusText: document.getElementById('hpStatusText'),
+    btnStartHpScan: document.getElementById('btnStartHpScan'),
+
     // Deskew Modal
     deskewModal: document.getElementById('deskewModal'),
-    deskewPageBadge: document.getElementById('deskewPageBadge'),
     btnCloseDeskew: document.getElementById('btnCloseDeskew'),
     btnCancelDeskew: document.getElementById('btnCancelDeskew'),
     btnApplyDeskew: document.getElementById('btnApplyDeskew'),
+    deskewPageBadge: document.getElementById('deskewPageBadge'),
     deskewAngleVal: document.getElementById('deskewAngleVal'),
     deskewSlider: document.getElementById('deskewSlider'),
-    deskewGridToggle: document.getElementById('deskewGridToggle'),
-    deskewCropToggle: document.getElementById('deskewCropToggle'),
+    btnResetDeskewAngle: document.getElementById('btnResetDeskewAngle'),
     deskewCanvas: document.getElementById('deskewCanvas'),
     alignmentGridOverlay: document.getElementById('alignmentGridOverlay'),
 
@@ -115,76 +131,34 @@ if (typeof pdfjsLib !== 'undefined') {
     strokeSizeRange: document.getElementById('strokeSizeRange'),
     strokeSizeVal: document.getElementById('strokeSizeVal'),
     customColorPicker: document.getElementById('customColorPicker'),
-    fontSizeSelect: document.getElementById('fontSizeSelect'),
-    textOptionsGroup: document.getElementById('textOptionsGroup'),
     btnUndoCanvas: document.getElementById('btnUndoCanvas'),
-    btnClearCanvas: document.getElementById('btnClearCanvas'),
 
-    // Blank Page Modal
-    blankPageModal: document.getElementById('blankPageModal'),
-    btnCloseBlankModal: document.getElementById('btnCloseBlankModal'),
-    btnCancelBlankModal: document.getElementById('btnCancelBlankModal'),
-    btnConfirmAddBlank: document.getElementById('btnConfirmAddBlank'),
-    pageOrientationSelect: document.getElementById('pageOrientationSelect'),
-    pageInsertPositionSelect: document.getElementById('pageInsertPositionSelect'),
-
-    // Clear Modal
-    confirmClearModal: document.getElementById('confirmClearModal'),
-    btnCloseClearModal: document.getElementById('btnCloseClearModal'),
-    btnCancelClear: document.getElementById('btnCancelClear'),
-    btnConfirmClear: document.getElementById('btnConfirmClear'),
-
-    // HP Scan Modal
-    btnOpenHpScan: document.getElementById('btnOpenHpScan'),
-    btnHpScanMain: document.getElementById('btnHpScanMain'),
-    btnMenuHpScan: document.getElementById('btnMenuHpScan'),
-    hpScanModal: document.getElementById('hpScanModal'),
-    btnCloseHpModal: document.getElementById('btnCloseHpModal'),
-    btnCancelHpScan: document.getElementById('btnCancelHpScan'),
-    hpPrinterIp: document.getElementById('hpPrinterIp'),
-    btnTestHpConnection: document.getElementById('btnTestHpConnection'),
-    hpStatusFeedback: document.getElementById('hpStatusFeedback'),
-    hpStatusText: document.getElementById('hpStatusText'),
-    hpResolutionSelect: document.getElementById('hpResolutionSelect'),
-    hpDuplexCheck: document.getElementById('hpDuplexCheck'),
-    duplexStateBadge: document.getElementById('duplexStateBadge'),
-    hpScanProgressBox: document.getElementById('hpScanProgressBox'),
-    hpScanProgressTitle: document.getElementById('hpScanProgressTitle'),
-    hpScanProgressSubtitle: document.getElementById('hpScanProgressSubtitle'),
-    btnStartHpScan: document.getElementById('btnStartHpScan'),
-    btnScanWia: document.getElementById('btnScanWia'),
-    btnToggleFolderScans: document.getElementById('btnToggleFolderScans'),
-    btnRefreshFolderScans: document.getElementById('btnRefreshFolderScans'),
-    folderFilesList: document.getElementById('folderFilesList'),
-
-    // Toast
+    // Toasts
     toastContainer: document.getElementById('toastContainer')
   };
 
   // ==========================================================================
-  // Initialization & Event Listeners
+  // Initialization
   // ==========================================================================
   function init() {
     setupUploadHandlers();
-    setupDropdown();
-    setupWorkbenchBar();
-    setupBlankPageModal();
-    setupClearModal();
+    setupWorkbenchToolbar();
     setupHpScanner();
-    setupMultiSelection();
+    setupBulkActionBar();
     setupDeskewEngine();
     setupEditorModal();
-    setupCanvasInteractions();
-    setupDownload();
+    setupSaveAndDownload();
+    setupClearHandler();
     updateUIState();
   }
 
   // ==========================================================================
-  // UI Helpers & Toasts
+  // Notifications & UI Helpers
   // ==========================================================================
   function showToast(message, type = 'info', duration = 3200) {
+    if (!DOM.toastContainer) return;
     const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
+    toast.className = `toast ${type}`;
 
     let iconClass = 'fa-circle-info';
     if (type === 'success') iconClass = 'fa-circle-check';
@@ -199,7 +173,7 @@ if (typeof pdfjsLib !== 'undefined') {
 
     setTimeout(() => {
       toast.style.opacity = '0';
-      toast.style.transform = 'translateX(50px)';
+      toast.style.transform = 'translateX(40px)';
       setTimeout(() => toast.remove(), 250);
     }, duration);
   }
@@ -212,62 +186,29 @@ if (typeof pdfjsLib !== 'undefined') {
 
   function updateUIState() {
     const count = state.pages.length;
-    DOM.chipCurrentCount.textContent = count;
-    
+    DOM.chipCurrentCount.textContent = `${count} ${count === 1 ? 'página' : 'páginas'}`;
+
     if (count === 0) {
       DOM.emptyState.classList.remove('hidden');
       DOM.workbenchView.classList.add('hidden');
-      DOM.pageCountStatus.textContent = 'Sin documentos cargados';
-      DOM.navStatus.querySelector('.status-indicator').classList.remove('active');
+      DOM.bulkActionBar.classList.add('hidden');
+      state.selectedPageIds.clear();
     } else {
       DOM.emptyState.classList.add('hidden');
       DOM.workbenchView.classList.remove('hidden');
-      DOM.pageCountStatus.textContent = `${count} ${count === 1 ? 'página activa' : 'páginas activas'}`;
-      DOM.navStatus.querySelector('.status-indicator').classList.add('active');
+      updateBulkActionBar();
     }
   }
 
   // ==========================================================================
-  // Dropdown Handling
-  // ==========================================================================
-  function setupDropdown() {
-    DOM.btnAddPageDropdown.addEventListener('click', (e) => {
-      e.stopPropagation();
-      DOM.btnAddPageDropdown.parentElement.classList.toggle('open');
-    });
-
-    document.addEventListener('click', (e) => {
-      if (!DOM.btnAddPageDropdown.parentElement.contains(e.target)) {
-        DOM.btnAddPageDropdown.parentElement.classList.remove('open');
-      }
-    });
-
-    DOM.btnMenuBlankPage.addEventListener('click', () => {
-      DOM.btnAddPageDropdown.parentElement.classList.remove('open');
-      openBlankPageModal();
-    });
-
-    DOM.btnMenuUploadImage.addEventListener('click', () => {
-      DOM.btnAddPageDropdown.parentElement.classList.remove('open');
-      DOM.imageFileInput.click();
-    });
-
-    DOM.btnMenuAppendPdf.addEventListener('click', () => {
-      DOM.btnAddPageDropdown.parentElement.classList.remove('open');
-      DOM.pdfFileInput.click();
-    });
-  }
-
-  // ==========================================================================
-  // Upload & File Ingestion
+  // Upload & File Handling
   // ==========================================================================
   function setupUploadHandlers() {
-    // Buttons triggering inputs
+    // Triggers
     DOM.btnUploadPdf.addEventListener('click', () => DOM.pdfFileInput.click());
     DOM.btnSelectPdfMain.addEventListener('click', () => DOM.pdfFileInput.click());
-    DOM.btnStartBlankDoc.addEventListener('click', () => openBlankPageModal());
 
-    // File inputs change
+    // File input changes
     DOM.pdfFileInput.addEventListener('change', (e) => {
       if (e.target.files && e.target.files.length > 0) {
         handlePdfFiles(Array.from(e.target.files));
@@ -284,15 +225,15 @@ if (typeof pdfjsLib !== 'undefined') {
 
     // Drag and Drop on Empty State Dropzone
     const dropzone = DOM.dropzone;
-    ['dragenter', 'dragover'].forEach((eventName) => {
-      dropzone.addEventListener(eventName, (e) => {
+    ['dragenter', 'dragover'].forEach((ev) => {
+      dropzone.addEventListener(ev, (e) => {
         e.preventDefault();
         dropzone.classList.add('drag-active');
       });
     });
 
-    ['dragleave', 'drop'].forEach((eventName) => {
-      dropzone.addEventListener(eventName, (e) => {
+    ['dragleave', 'drop'].forEach((ev) => {
+      dropzone.addEventListener(ev, (e) => {
         e.preventDefault();
         dropzone.classList.remove('drag-active');
       });
@@ -302,44 +243,42 @@ if (typeof pdfjsLib !== 'undefined') {
       const files = Array.from(e.dataTransfer.files);
       if (files.length === 0) return;
 
-      const pdfFiles = files.filter((f) => f.type === 'application/pdf' || f.name.endsWith('.pdf'));
+      const pdfFiles = files.filter((f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
       const imgFiles = files.filter((f) => f.type.startsWith('image/'));
 
       if (pdfFiles.length > 0) handlePdfFiles(pdfFiles);
       if (imgFiles.length > 0) handleImageFiles(imgFiles);
 
       if (pdfFiles.length === 0 && imgFiles.length === 0) {
-        showToast('Por favor sube archivos PDF o imágenes compatibles.', 'danger');
+        showToast('Por favor sube archivos PDF o imágenes.', 'danger');
       }
     });
   }
 
   async function handlePdfFiles(files) {
-    showToast(`Cargando ${files.length} archivo(s) PDF...`, 'info', 2000);
+    showToast(`Cargando ${files.length} archivo(s)...`, 'info', 2000);
 
     for (const file of files) {
       try {
         const arrayBuffer = await file.arrayBuffer();
         const docId = 'doc_' + Math.random().toString(36).substring(2, 9);
 
-        // Load with PDF.js for rendering
+        // Render pages with PDF.js
         const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
         const pdfJsDoc = await loadingTask.promise;
 
-        // Store source document
         state.sourceDocuments.set(docId, {
           name: file.name,
           bytes: new Uint8Array(arrayBuffer),
           pdfJsDoc: pdfJsDoc
         });
 
-        // Extract pages
         const numPages = pdfJsDoc.numPages;
         for (let pageNum = 1; pageNum <= numPages; pageNum++) {
           const pdfPage = await pdfJsDoc.getPage(pageNum);
           const viewport = pdfPage.getViewport({ scale: 1.0 });
 
-          // Generate thumbnail
+          // Render thumbnail
           const thumbScale = 1.0;
           const thumbViewport = pdfPage.getViewport({ scale: thumbScale });
           const thumbCanvas = document.createElement('canvas');
@@ -356,12 +295,12 @@ if (typeof pdfjsLib !== 'undefined') {
             id: 'page_' + Math.random().toString(36).substring(2, 9),
             type: 'pdf-page',
             sourceDocId: docId,
-            sourcePageIndex: pageNum - 1, // 0-based
+            sourcePageIndex: pageNum - 1,
             width: viewport.width,
             height: viewport.height,
             rotation: 0,
-            thumbnailUrl: thumbCanvas.toDataURL('image/jpeg', 0.85),
-            canvasDataUrl: null, // set when edited
+            thumbnailUrl: thumbCanvas.toDataURL('image/jpeg', 0.88),
+            canvasDataUrl: null,
             isEdited: false,
             originalName: `${file.name} (Pág. ${pageNum})`
           };
@@ -369,9 +308,9 @@ if (typeof pdfjsLib !== 'undefined') {
           state.pages.push(pageObj);
         }
 
-        showToast(`PDF "${file.name}" cargado (${numPages} páginas)`, 'success');
+        showToast(`"${file.name}" cargado (${numPages} pág.)`, 'success');
       } catch (err) {
-        console.error('Error loading PDF:', err);
+        console.error('Error cargando PDF:', err);
         showToast(`Error al procesar "${file.name}": ${err.message}`, 'danger');
       }
     }
@@ -388,13 +327,11 @@ if (typeof pdfjsLib !== 'undefined') {
         img.src = dataUrl;
         await img.decode();
 
-        // Fit into standard A4 canvas proportions or use image native size
         let targetWidth = A4_PORTRAIT.width;
         let targetHeight = (img.height / img.width) * targetWidth;
 
-        // Render to canvas
         const canvas = document.createElement('canvas');
-        canvas.width = targetWidth * 2; // high res
+        canvas.width = targetWidth * 2;
         canvas.height = targetHeight * 2;
         const ctx = canvas.getContext('2d');
         ctx.fillStyle = '#ffffff';
@@ -418,9 +355,9 @@ if (typeof pdfjsLib !== 'undefined') {
         };
 
         state.pages.push(pageObj);
-        showToast(`Imagen "${file.name}" agregada como hoja`, 'success');
+        showToast(`Imagen "${file.name}" agregada`, 'success');
       } catch (err) {
-        console.error('Error adding image:', err);
+        console.error('Error agregando imagen:', err);
         showToast(`Error al cargar imagen: ${err.message}`, 'danger');
       }
     }
@@ -438,425 +375,214 @@ if (typeof pdfjsLib !== 'undefined') {
     });
   }
 
-  // ==========================================================================
-  // Blank Page Creation
-  // ==========================================================================
-  function setupBlankPageModal() {
-    DOM.btnCloseBlankModal.addEventListener('click', closeBlankPageModal);
-    DOM.btnCancelBlankModal.addEventListener('click', closeBlankPageModal);
-
-    // Pattern radio selection
-    const styleCards = DOM.blankPageModal.querySelectorAll('.style-card');
-    styleCards.forEach((card) => {
-      card.addEventListener('click', () => {
-        styleCards.forEach((c) => c.classList.remove('active'));
-        card.classList.add('active');
-        const radio = card.querySelector('input[type="radio"]');
-        if (radio) radio.checked = true;
-      });
-    });
-
-    DOM.btnConfirmAddBlank.addEventListener('click', () => {
-      const selectedRadio = DOM.blankPageModal.querySelector('input[name="pagePattern"]:checked');
-      const pattern = selectedRadio ? selectedRadio.value : 'blank';
-      const orientation = DOM.pageOrientationSelect.value;
-      const position = DOM.pageInsertPositionSelect.value;
-
-      createBlankPage(pattern, orientation, position);
-      closeBlankPageModal();
-    });
-  }
-
-  function openBlankPageModal() {
-    DOM.blankPageModal.classList.remove('hidden');
-  }
-
-  function closeBlankPageModal() {
-    DOM.blankPageModal.classList.add('hidden');
-  }
-
-  function createBlankPage(pattern, orientation, position) {
-    const dims = orientation === 'landscape' ? A4_LANDSCAPE : A4_PORTRAIT;
+  // Quick Blank Page
+  function addBlankPageQuick() {
     const canvas = document.createElement('canvas');
-    canvas.width = dims.width * 2;
-    canvas.height = dims.height * 2;
+    canvas.width = A4_PORTRAIT.width * 1.5;
+    canvas.height = A4_PORTRAIT.height * 1.5;
     const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Fill background according to pattern
-    if (pattern === 'dark') {
-      ctx.fillStyle = '#1e293b';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    } else {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const blankUrl = canvas.toDataURL('image/jpeg', 0.9);
 
-      if (pattern === 'lined') {
-        ctx.strokeStyle = '#cbd5e1';
-        ctx.lineWidth = 1.5;
-        const lineSpacing = 32;
-        for (let y = lineSpacing; y < canvas.height; y += lineSpacing) {
-          ctx.beginPath();
-          ctx.moveTo(40, y);
-          ctx.lineTo(canvas.width - 40, y);
-          ctx.stroke();
-        }
-      } else if (pattern === 'grid') {
-        ctx.strokeStyle = '#e2e8f0';
-        ctx.lineWidth = 1;
-        const gridSpacing = 28;
-        for (let x = 0; x < canvas.width; x += gridSpacing) {
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, canvas.height);
-          ctx.stroke();
-        }
-        for (let y = 0; y < canvas.height; y += gridSpacing) {
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(canvas.width, y);
-          ctx.stroke();
-        }
-      }
-    }
-
-    const dataUrl = canvas.toDataURL('image/png');
-
-    const newPage = {
+    const pageObj = {
       id: 'page_' + Math.random().toString(36).substring(2, 9),
-      type: 'blank',
+      type: 'image',
       sourceDocId: null,
       sourcePageIndex: null,
-      width: dims.width,
-      height: dims.height,
+      width: A4_PORTRAIT.width,
+      height: A4_PORTRAIT.height,
       rotation: 0,
-      thumbnailUrl: dataUrl,
-      canvasDataUrl: dataUrl,
+      thumbnailUrl: blankUrl,
+      canvasDataUrl: blankUrl,
       isEdited: true,
-      originalName: `Hoja en blanco (${pattern})`
+      originalName: 'Hoja en Blanco'
     };
 
-    if (position === 'start') {
-      state.pages.unshift(newPage);
-    } else {
-      state.pages.push(newPage);
-    }
-
+    state.pages.push(pageObj);
     renderPagesGrid();
     updateUIState();
-    showToast('Nueva hoja agregada exitosamente', 'success');
+    showToast('Hoja en blanco agregada', 'success');
   }
 
   // ==========================================================================
-  // Workbench Bar Actions (Rotate All, Zoom, Quick Add)
+  // Workbench Toolbar
   // ==========================================================================
-  function setupWorkbenchBar() {
+  function setupWorkbenchToolbar() {
+    DOM.btnWorkbenchScanMore.addEventListener('click', openHpScanModal);
+    DOM.btnQuickAddBlank.addEventListener('click', addBlankPageQuick);
+
     DOM.btnRotateAllCw.addEventListener('click', () => {
       if (state.pages.length === 0) return;
       state.pages.forEach((p) => {
         p.rotation = (p.rotation + 90) % 360;
       });
       renderPagesGrid();
-      showToast('Todas las páginas fueron rotadas 90°', 'info');
-    });
-
-    DOM.btnQuickAddBlank.addEventListener('click', () => {
-      createBlankPage('blank', 'portrait', 'end');
+      showToast('Todas las hojas giradas 90°', 'info', 2000);
     });
 
     DOM.btnZoomIn.addEventListener('click', () => {
-      if (DOM.pagesGrid.classList.contains('zoom-sm')) {
-        DOM.pagesGrid.classList.remove('zoom-sm');
-      } else {
-        DOM.pagesGrid.classList.add('zoom-lg');
-      }
+      DOM.pagesGrid.classList.remove('zoom-sm');
+      DOM.pagesGrid.classList.toggle('zoom-lg');
     });
 
     DOM.btnZoomOut.addEventListener('click', () => {
-      if (DOM.pagesGrid.classList.contains('zoom-lg')) {
-        DOM.pagesGrid.classList.remove('zoom-lg');
-      } else {
-        DOM.pagesGrid.classList.add('zoom-sm');
-      }
+      DOM.pagesGrid.classList.remove('zoom-lg');
+      DOM.pagesGrid.classList.toggle('zoom-sm');
     });
   }
 
   // ==========================================================================
-  // Clear All Modal
+  // Pages Grid Rendering & Drag-and-Drop
   // ==========================================================================
-  function setupClearModal() {
-    DOM.btnClearAll.addEventListener('click', () => {
-      if (state.pages.length === 0) return;
-      DOM.confirmClearModal.classList.remove('hidden');
-    });
-
-    DOM.btnCloseClearModal.addEventListener('click', () => {
-      DOM.confirmClearModal.classList.add('hidden');
-    });
-
-    DOM.btnCancelClear.addEventListener('click', () => {
-      DOM.confirmClearModal.classList.add('hidden');
-    });
-
-    DOM.btnConfirmClear.addEventListener('click', () => {
-      state.pages = [];
-      state.sourceDocuments.clear();
-      renderPagesGrid();
-      updateUIState();
-      DOM.confirmClearModal.classList.add('hidden');
-      showToast('Se han eliminado todas las hojas del proyecto', 'danger');
-    });
-  }
-
-  // ==========================================================================
-  // Page Cards Grid, Multi-Selection & Drag & Drop
-  // ==========================================================================
-  function setupMultiSelection() {
-    DOM.btnBulkRotate.addEventListener('click', rotateSelectedPages);
-    DOM.btnBulkDelete.addEventListener('click', deleteSelectedPages);
-    DOM.btnBulkSelectAll.addEventListener('click', () => {
-      state.pages.forEach((p) => state.selectedPageIds.add(p.id));
-      renderPagesGrid();
-      updateBulkActionBar();
-    });
-    DOM.btnBulkDeselectAll.addEventListener('click', () => {
-      state.selectedPageIds.clear();
-      renderPagesGrid();
-      updateBulkActionBar();
-    });
-  }
-
-  function togglePageSelection(pageId) {
-    if (state.selectedPageIds.has(pageId)) {
-      state.selectedPageIds.delete(pageId);
-    } else {
-      state.selectedPageIds.add(pageId);
-    }
-    state.lastSelectedId = pageId;
-    renderPagesGrid();
-    updateBulkActionBar();
-  }
-
-  function selectRange(startId, endId) {
-    const ids = state.pages.map((p) => p.id);
-    const startIdx = ids.indexOf(startId);
-    const endIdx = ids.indexOf(endId);
-    if (startIdx === -1 || endIdx === -1) return;
-
-    const min = Math.min(startIdx, endIdx);
-    const max = Math.max(startIdx, endIdx);
-    for (let i = min; i <= max; i++) {
-      state.selectedPageIds.add(ids[i]);
-    }
-    renderPagesGrid();
-    updateBulkActionBar();
-  }
-
-  function updateBulkActionBar() {
-    const count = state.selectedPageIds.size;
-    if (count > 0) {
-      DOM.bulkActionBar.classList.remove('hidden');
-      DOM.bulkCountText.innerHTML = `<strong>${count}</strong> ${count === 1 ? 'hoja seleccionada' : 'hojas seleccionadas'}`;
-    } else {
-      DOM.bulkActionBar.classList.add('hidden');
-    }
-  }
-
-  function rotateSelectedPages() {
-    if (state.selectedPageIds.size === 0) return;
-    state.pages.forEach((p) => {
-      if (state.selectedPageIds.has(p.id)) {
-        p.rotation = (p.rotation + 90) % 360;
-      }
-    });
-    renderPagesGrid();
-    showToast(`Se rotaron 90° las hojas seleccionadas`, 'info', 2000);
-  }
-
-  function deleteSelectedPages() {
-    if (state.selectedPageIds.size === 0) return;
-    const count = state.selectedPageIds.size;
-    state.pages = state.pages.filter((p) => !state.selectedPageIds.has(p.id));
-    state.selectedPageIds.clear();
-    renderPagesGrid();
-    updateUIState();
-    updateBulkActionBar();
-    showToast(`Se eliminaron ${count} hoja(s) seleccionada(s)`, 'danger', 2500);
-  }
-
   function renderPagesGrid() {
     DOM.pagesGrid.innerHTML = '';
 
     state.pages.forEach((page, index) => {
-      const card = createPageCardElement(page, index);
+      const card = document.createElement('div');
+      card.className = 'page-card';
+      card.dataset.id = page.id;
+      card.dataset.index = index;
+      card.draggable = true;
+
+      const isSelected = state.selectedPageIds.has(page.id);
+      if (isSelected) {
+        card.classList.add('selected');
+      }
+
+      // Card Header
+      const header = document.createElement('div');
+      header.className = 'card-top-bar';
+      header.innerHTML = `
+        <div class="page-number-pill">
+          <i class="fa-solid fa-file"></i>
+          <span>Pág. ${index + 1}</span>
+        </div>
+        ${page.rotation !== 0 ? `<span style="font-size:0.75rem;color:var(--text-muted);font-family:monospace;">${page.rotation}°</span>` : ''}
+      `;
+
+      // Select Check badge if selected
+      if (isSelected) {
+        const checkBadge = document.createElement('div');
+        checkBadge.className = 'page-card-select-check';
+        checkBadge.innerHTML = '<i class="fa-solid fa-check"></i>';
+        card.appendChild(checkBadge);
+      }
+
+      // Preview Area
+      const previewArea = document.createElement('div');
+      previewArea.className = 'card-preview-area';
+
+      const img = document.createElement('img');
+      img.className = 'card-canvas';
+      img.src = page.canvasDataUrl || page.thumbnailUrl;
+      img.alt = `Página ${index + 1}`;
+      img.style.transform = `rotate(${page.rotation}deg)`;
+
+      // Hover quick actions overlay
+      const hoverOverlay = document.createElement('div');
+      hoverOverlay.className = 'card-hover-overlay';
+      hoverOverlay.innerHTML = `
+        <button class="btn-overlay-action btn-edit-page" title="Dibujar o firmar esta hoja">
+          <i class="fa-solid fa-pen"></i> Editar
+        </button>
+      `;
+
+      previewArea.appendChild(img);
+      previewArea.appendChild(hoverOverlay);
+
+      // Card Bottom Actions
+      const bottomActions = document.createElement('div');
+      bottomActions.className = 'card-bottom-actions';
+      bottomActions.innerHTML = `
+        <div class="action-btn-group">
+          <button class="card-act-btn btn-rotate-cw" title="Girar 90°">
+            <i class="fa-solid fa-rotate-right"></i>
+          </button>
+          <button class="card-act-btn deskew-btn btn-deskew" title="Enderezar hoja chueca">
+            <i class="fa-solid fa-compass-drafting"></i>
+          </button>
+        </div>
+        <button class="card-act-btn delete-btn btn-delete-page" title="Eliminar hoja">
+          <i class="fa-solid fa-trash-can"></i>
+        </button>
+      `;
+
+      card.appendChild(header);
+      card.appendChild(previewArea);
+      card.appendChild(bottomActions);
+
+      // Event: Selection (Ctrl + Click or direct Click)
+      card.addEventListener('click', (e) => {
+        // Ignore if clicked on an action button
+        if (e.target.closest('.card-act-btn') || e.target.closest('.btn-overlay-action')) return;
+
+        if (e.ctrlKey || e.metaKey) {
+          // Toggle individual in multi-selection
+          if (state.selectedPageIds.has(page.id)) {
+            state.selectedPageIds.delete(page.id);
+          } else {
+            state.selectedPageIds.add(page.id);
+          }
+        } else {
+          // Single select or toggle
+          if (state.selectedPageIds.has(page.id) && state.selectedPageIds.size === 1) {
+            state.selectedPageIds.clear();
+          } else {
+            state.selectedPageIds.clear();
+            state.selectedPageIds.add(page.id);
+          }
+        }
+        state.lastSelectedId = page.id;
+        renderPagesGrid();
+        updateBulkActionBar();
+      });
+
+      // Actions inside card
+      hoverOverlay.querySelector('.btn-edit-page').addEventListener('click', (e) => {
+        e.stopPropagation();
+        openEditorModal(page.id);
+      });
+
+      bottomActions.querySelector('.btn-rotate-cw').addEventListener('click', (e) => {
+        e.stopPropagation();
+        page.rotation = (page.rotation + 90) % 360;
+        renderPagesGrid();
+      });
+
+      bottomActions.querySelector('.btn-deskew').addEventListener('click', (e) => {
+        e.stopPropagation();
+        openDeskewModal(page.id);
+      });
+
+      bottomActions.querySelector('.btn-delete-page').addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteSinglePage(page.id);
+      });
+
+      // Drag & Drop Reordering
+      setupCardDragAndDrop(card, index);
+
       DOM.pagesGrid.appendChild(card);
     });
 
     updateBulkActionBar();
   }
 
-  function createPageCardElement(page, index) {
-    const card = document.createElement('div');
-    const isSelected = state.selectedPageIds.has(page.id);
-    card.className = `page-card ${isSelected ? 'selected' : ''}`;
-    card.draggable = true;
-    card.dataset.index = index;
-    card.dataset.id = page.id;
-
-    // Selected indicator checkmark pill
-    if (isSelected) {
-      const checkBadge = document.createElement('div');
-      checkBadge.className = 'page-card-select-check';
-      checkBadge.innerHTML = '<i class="fa-solid fa-check"></i>';
-      card.appendChild(checkBadge);
+  function deleteSinglePage(pageId) {
+    const idx = state.pages.findIndex((p) => p.id === pageId);
+    if (idx !== -1) {
+      state.pages.splice(idx, 1);
+      state.selectedPageIds.delete(pageId);
+      renderPagesGrid();
+      updateUIState();
+      showToast('Hoja eliminada', 'info', 1800);
     }
+  }
 
-    // Header with page number badge and rotation
-    const topBar = document.createElement('div');
-    topBar.className = 'card-top-bar';
-
-    const numBadge = document.createElement('div');
-    numBadge.className = 'page-number-pill';
-    numBadge.innerHTML = `
-      <i class="fa-solid fa-grip-vertical drag-handle" title="Arrastra para mover"></i>
-      <span>Pág. ${index + 1}</span>
-      ${page.isEdited ? '<span class="page-tag-edited">Editada</span>' : ''}
-    `;
-
-    const rotBadge = document.createElement('span');
-    rotBadge.className = 'page-rotation-pill';
-    rotBadge.textContent = page.rotation > 0 ? `${page.rotation}°` : '';
-
-    topBar.appendChild(numBadge);
-    topBar.appendChild(rotBadge);
-
-    // Preview area
-    const previewArea = document.createElement('div');
-    previewArea.className = 'card-preview-area';
-
-    const img = document.createElement('img');
-    img.className = 'card-canvas';
-    img.src = page.thumbnailUrl;
-    img.alt = `Página ${index + 1}`;
-    img.style.transform = `rotate(${page.rotation}deg)`;
-
-    // Hover Quick Edit Button
-    const overlay = document.createElement('div');
-    overlay.className = 'card-hover-overlay';
-    const editOverlayBtn = document.createElement('button');
-    editOverlayBtn.className = 'btn-edit-page-overlay';
-    editOverlayBtn.innerHTML = '<i class="fa-solid fa-pen"></i><span>Editar Hoja</span>';
-    editOverlayBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openEditorModal(page.id);
-    });
-    overlay.appendChild(editOverlayBtn);
-
-    previewArea.appendChild(img);
-    previewArea.appendChild(overlay);
-
-    // Bottom Action Controls
-    const bottomBar = document.createElement('div');
-    bottomBar.className = 'card-bottom-actions';
-
-    // Move buttons
-    const moveGroup = document.createElement('div');
-    moveGroup.className = 'action-btn-group';
-
-    const btnMoveLeft = document.createElement('button');
-    btnMoveLeft.className = 'card-act-btn';
-    btnMoveLeft.title = 'Mover hacia la izquierda';
-    btnMoveLeft.innerHTML = '<i class="fa-solid fa-chevron-left"></i>';
-    btnMoveLeft.disabled = index === 0;
-    btnMoveLeft.addEventListener('click', (e) => {
-      e.stopPropagation();
-      movePage(index, index - 1);
-    });
-
-    const btnMoveRight = document.createElement('button');
-    btnMoveRight.className = 'card-act-btn';
-    btnMoveRight.title = 'Mover hacia la derecha';
-    btnMoveRight.innerHTML = '<i class="fa-solid fa-chevron-right"></i>';
-    btnMoveRight.disabled = index === state.pages.length - 1;
-    btnMoveRight.addEventListener('click', (e) => {
-      e.stopPropagation();
-      movePage(index, index + 1);
-    });
-
-    moveGroup.appendChild(btnMoveLeft);
-    moveGroup.appendChild(btnMoveRight);
-
-    // Action buttons: Rotate, Deskew, Duplicate & Delete
-    const actGroup = document.createElement('div');
-    actGroup.className = 'action-btn-group';
-
-    const btnRotate = document.createElement('button');
-    btnRotate.className = 'card-act-btn';
-    btnRotate.title = 'Rotar 90°';
-    btnRotate.innerHTML = '<i class="fa-solid fa-rotate-right"></i>';
-    btnRotate.addEventListener('click', (e) => {
-      e.stopPropagation();
-      page.rotation = (page.rotation + 90) % 360;
-      img.style.transform = `rotate(${page.rotation}deg)`;
-      rotBadge.textContent = page.rotation > 0 ? `${page.rotation}°` : '';
-    });
-
-    const btnDeskew = document.createElement('button');
-    btnDeskew.className = 'card-act-btn';
-    btnDeskew.title = 'Enderezar escaneo chueco';
-    btnDeskew.innerHTML = '<i class="fa-solid fa-compass-drafting"></i>';
-    btnDeskew.addEventListener('click', (e) => {
-      e.stopPropagation();
-      openDeskewModal(page.id);
-    });
-
-    const btnDuplicate = document.createElement('button');
-    btnDuplicate.className = 'card-act-btn';
-    btnDuplicate.title = 'Duplicar esta hoja';
-    btnDuplicate.innerHTML = '<i class="fa-solid fa-copy"></i>';
-    btnDuplicate.addEventListener('click', (e) => {
-      e.stopPropagation();
-      duplicatePage(index);
-    });
-
-    const btnDelete = document.createElement('button');
-    btnDelete.className = 'card-act-btn delete-btn';
-    btnDelete.title = 'Eliminar hoja';
-    btnDelete.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
-    btnDelete.addEventListener('click', (e) => {
-      e.stopPropagation();
-      deletePage(index);
-    });
-
-    actGroup.appendChild(btnRotate);
-    actGroup.appendChild(btnDeskew);
-    actGroup.appendChild(btnDuplicate);
-    actGroup.appendChild(btnDelete);
-
-    bottomBar.appendChild(moveGroup);
-    bottomBar.appendChild(actGroup);
-
-    card.appendChild(topBar);
-    card.appendChild(previewArea);
-    card.appendChild(bottomBar);
-
-    // Click handler for Multi-Selection (Ctrl + Click & Shift + Click)
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('button') || e.target.closest('input')) return;
-
-      if (e.shiftKey && state.lastSelectedId) {
-        selectRange(state.lastSelectedId, page.id);
-      } else {
-        togglePageSelection(page.id);
-      }
-    });
-
-    // Setup Drag & Drop Handlers (Supports dragging single or grouped selection!)
+  function setupCardDragAndDrop(card, index) {
     card.addEventListener('dragstart', (e) => {
-      if (!state.selectedPageIds.has(page.id)) {
-        state.selectedPageIds.clear();
-        state.selectedPageIds.add(page.id);
-        renderPagesGrid();
-      }
       state.draggedIndex = index;
       card.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
@@ -884,434 +610,142 @@ if (typeof pdfjsLib !== 'undefined') {
     card.addEventListener('drop', (e) => {
       e.preventDefault();
       card.classList.remove('drag-over');
-      if (state.draggedIndex !== null && state.draggedIndex !== index) {
-        moveGroupSelection(state.draggedIndex, index);
+      const fromIdx = state.draggedIndex;
+      const toIdx = index;
+
+      if (fromIdx !== null && fromIdx !== toIdx) {
+        const [movedPage] = state.pages.splice(fromIdx, 1);
+        state.pages.splice(toIdx, 0, movedPage);
+        renderPagesGrid();
+        showToast(`Hoja movida a la posición ${toIdx + 1}`, 'info', 1800);
       }
     });
-
-    return card;
-  }
-
-  function movePage(fromIndex, toIndex) {
-    if (toIndex < 0 || toIndex >= state.pages.length) return;
-    const [moved] = state.pages.splice(fromIndex, 1);
-    state.pages.splice(toIndex, 0, moved);
-    renderPagesGrid();
-    showToast(`Página movida a la posición ${toIndex + 1}`, 'info', 1500);
-  }
-
-  function moveGroupSelection(fromIndex, toIndex) {
-    // If only one card is selected or dragging unselected
-    if (state.selectedPageIds.size <= 1) {
-      movePage(fromIndex, toIndex);
-      return;
-    }
-
-    // Multiple pages selected: move all selected in preserved relative order
-    const selectedIndices = [];
-    const selectedItems = [];
-
-    state.pages.forEach((p, idx) => {
-      if (state.selectedPageIds.has(p.id)) {
-        selectedIndices.push(idx);
-        selectedItems.push(p);
-      }
-    });
-
-    const targetPage = state.pages[toIndex];
-    const remaining = state.pages.filter((p) => !state.selectedPageIds.has(p.id));
-    let insertAt = remaining.indexOf(targetPage);
-    if (insertAt === -1) insertAt = toIndex > fromIndex ? remaining.length : 0;
-
-    remaining.splice(insertAt, 0, ...selectedItems);
-    state.pages = remaining;
-
-    renderPagesGrid();
-    showToast(`Se movieron ${selectedItems.length} hojas seleccionadas en grupo`, 'info', 2000);
-  }
-
-  function duplicatePage(index) {
-    const original = state.pages[index];
-    const cloned = {
-      ...original,
-      id: 'page_' + Math.random().toString(36).substring(2, 9)
-    };
-    state.pages.splice(index + 1, 0, cloned);
-    renderPagesGrid();
-    updateUIState();
-    showToast(`Página ${index + 1} duplicada`, 'success');
-  }
-
-  function deletePage(index) {
-    const removed = state.pages.splice(index, 1)[0];
-    state.selectedPageIds.delete(removed.id);
-    renderPagesGrid();
-    updateUIState();
-    updateBulkActionBar();
-    showToast(`Página ${index + 1} eliminada`, 'danger', 2000);
   }
 
   // ==========================================================================
-  // Page Editor Modal & Canvas Drawing Engine
+  // Floating Bulk Action Bar (Multi-Select)
   // ==========================================================================
-  function setupEditorModal() {
-    const editor = state.editor;
-    editor.bgCanvas = DOM.bgCanvas;
-    editor.drawCanvas = DOM.drawCanvas;
-    editor.bgCtx = DOM.bgCanvas.getContext('2d');
-    editor.drawCtx = DOM.drawCanvas.getContext('2d');
-
-    // Close & Cancel
-    DOM.btnCloseEditor.addEventListener('click', closeEditorModal);
-    DOM.btnCancelEditor.addEventListener('click', closeEditorModal);
-
-    // Tool buttons selection
-    const toolTiles = DOM.editorModal.querySelectorAll('.tool-tile');
-    toolTiles.forEach((tile) => {
-      tile.addEventListener('click', () => {
-        toolTiles.forEach((t) => t.classList.remove('active'));
-        tile.classList.add('active');
-        editor.tool = tile.dataset.tool;
-
-        if (editor.tool === 'text') {
-          DOM.textOptionsGroup.style.display = 'flex';
-        } else {
-          DOM.textOptionsGroup.style.display = 'none';
+  function setupBulkActionBar() {
+    DOM.btnBulkRotate.addEventListener('click', () => {
+      if (state.selectedPageIds.size === 0) return;
+      state.pages.forEach((p) => {
+        if (state.selectedPageIds.has(p.id)) {
+          p.rotation = (p.rotation + 90) % 360;
         }
       });
+      renderPagesGrid();
+      showToast(`${state.selectedPageIds.size} hoja(s) girada(s) 90°`, 'info', 2000);
     });
 
-    // Color swatches selection
-    const swatches = DOM.editorModal.querySelectorAll('.color-swatch');
-    swatches.forEach((swatch) => {
-      swatch.addEventListener('click', () => {
-        swatches.forEach((s) => s.classList.remove('active'));
-        swatch.classList.add('active');
-        editor.color = swatch.dataset.color;
-      });
+    DOM.btnBulkDelete.addEventListener('click', () => {
+      if (state.selectedPageIds.size === 0) return;
+      const count = state.selectedPageIds.size;
+      state.pages = state.pages.filter((p) => !state.selectedPageIds.has(p.id));
+      state.selectedPageIds.clear();
+      renderPagesGrid();
+      updateUIState();
+      showToast(`${count} hoja(s) eliminada(s)`, 'danger', 2500);
     });
 
-    DOM.customColorPicker.addEventListener('input', (e) => {
-      swatches.forEach((s) => s.classList.remove('active'));
-      editor.color = e.target.value;
+    DOM.btnBulkSelectAll.addEventListener('click', () => {
+      state.pages.forEach((p) => state.selectedPageIds.add(p.id));
+      renderPagesGrid();
     });
 
-    // Stroke size slider
-    DOM.strokeSizeRange.addEventListener('input', (e) => {
-      editor.strokeSize = parseInt(e.target.value, 10);
-      DOM.strokeSizeVal.textContent = `${editor.strokeSize}px`;
+    DOM.btnBulkDeselectAll.addEventListener('click', () => {
+      state.selectedPageIds.clear();
+      renderPagesGrid();
     });
-
-    // Font size select
-    DOM.fontSizeSelect.addEventListener('change', (e) => {
-      editor.fontSize = parseInt(e.target.value, 10);
-    });
-
-    // Undo & Clear Canvas
-    DOM.btnUndoCanvas.addEventListener('click', undoCanvasStep);
-    DOM.btnClearCanvas.addEventListener('click', () => {
-      editor.drawCtx.clearRect(0, 0, editor.drawCanvas.width, editor.drawCanvas.height);
-      saveCanvasHistory();
-      showToast('Se limpiaron los trazos de la hoja', 'info');
-    });
-
-    // Save Changes
-    DOM.btnSaveEditor.addEventListener('click', saveEditorChanges);
   }
 
-  async function openEditorModal(pageId) {
-    const page = state.pages.find((p) => p.id === pageId);
-    if (!page) return;
-
-    state.editor.activePageId = pageId;
-    const pageIndex = state.pages.indexOf(page);
-    DOM.modalPageNumberBadge.textContent = `#${pageIndex + 1}`;
-
-    const editor = state.editor;
-    const bgCanvas = editor.bgCanvas;
-    const drawCanvas = editor.drawCanvas;
-    const bgCtx = editor.bgCtx;
-    const drawCtx = editor.drawCtx;
-
-    // Reset history
-    editor.history = [];
-    editor.historyStep = -1;
-
-    // Determine target canvas dimensions (crisp scale)
-    const scale = 1.8;
-    const targetWidth = Math.round(page.width * scale);
-    const targetHeight = Math.round(page.height * scale);
-
-    bgCanvas.width = targetWidth;
-    bgCanvas.height = targetHeight;
-    drawCanvas.width = targetWidth;
-    drawCanvas.height = targetHeight;
-
-    // Reset contexts
-    bgCtx.clearRect(0, 0, targetWidth, targetHeight);
-    drawCtx.clearRect(0, 0, targetWidth, targetHeight);
-
-    // Render background
-    if (page.canvasDataUrl) {
-      // If page has a cached canvas dataUrl (blank, image, or previous edit)
-      const img = new Image();
-      img.src = page.canvasDataUrl;
-      await img.decode();
-      bgCtx.drawImage(img, 0, 0, targetWidth, targetHeight);
-    } else if (page.type === 'pdf-page' && page.sourceDocId) {
-      const srcDoc = state.sourceDocuments.get(page.sourceDocId);
-      if (srcDoc && srcDoc.pdfJsDoc) {
-        const pdfPage = await srcDoc.pdfJsDoc.getPage(page.sourcePageIndex + 1);
-        const viewport = pdfPage.getViewport({ scale: scale });
-        await pdfPage.render({
-          canvasContext: bgCtx,
-          viewport: viewport
-        }).promise;
-      }
+  function updateBulkActionBar() {
+    const count = state.selectedPageIds.size;
+    if (count > 0) {
+      DOM.bulkActionBar.classList.remove('hidden');
+      DOM.bulkCountText.innerHTML = `<strong>${count}</strong> ${count === 1 ? 'seleccionada' : 'seleccionadas'}`;
     } else {
-      bgCtx.fillStyle = '#ffffff';
-      bgCtx.fillRect(0, 0, targetWidth, targetHeight);
+      DOM.bulkActionBar.classList.add('hidden');
     }
-
-    // Save initial state to history
-    saveCanvasHistory();
-
-    DOM.editorModal.classList.remove('hidden');
-  }
-
-  function closeEditorModal() {
-    DOM.editorModal.classList.add('hidden');
-    state.editor.activePageId = null;
-  }
-
-  function setupCanvasInteractions() {
-    const editor = state.editor;
-    const drawCanvas = DOM.drawCanvas;
-    let lastX = 0;
-    let lastY = 0;
-
-    function getCoords(e) {
-      const rect = drawCanvas.getBoundingClientRect();
-      const scaleX = drawCanvas.width / rect.width;
-      const scaleY = drawCanvas.height / rect.height;
-      return {
-        x: (e.clientX - rect.left) * scaleX,
-        y: (e.clientY - rect.top) * scaleY
-      };
-    }
-
-    drawCanvas.addEventListener('mousedown', (e) => {
-      const { x, y } = getCoords(e);
-      lastX = x;
-      lastY = y;
-
-      if (editor.tool === 'text') {
-        insertTextAt(x, y);
-        return;
-      }
-
-      editor.isDrawing = true;
-      draw(x, y, true);
-    });
-
-    window.addEventListener('mousemove', (e) => {
-      if (!editor.isDrawing) return;
-      const { x, y } = getCoords(e);
-      draw(x, y);
-      lastX = x;
-      lastY = y;
-    });
-
-    window.addEventListener('mouseup', () => {
-      if (editor.isDrawing) {
-        editor.isDrawing = false;
-        saveCanvasHistory();
-      }
-    });
-
-    function draw(x, y, isStart = false) {
-      const ctx = editor.drawCtx;
-      ctx.beginPath();
-
-      if (editor.tool === 'pen') {
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.strokeStyle = editor.color;
-        ctx.lineWidth = editor.strokeSize;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.globalAlpha = 1.0;
-      } else if (editor.tool === 'highlighter') {
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.strokeStyle = editor.color;
-        ctx.lineWidth = editor.strokeSize * 3.5;
-        ctx.lineCap = 'square';
-        ctx.lineJoin = 'miter';
-        ctx.globalAlpha = 0.35;
-      } else if (editor.tool === 'eraser') {
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.lineWidth = editor.strokeSize * 3;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.globalAlpha = 1.0;
-      }
-
-      if (isStart) {
-        ctx.moveTo(x, y);
-        ctx.lineTo(x, y);
-      } else {
-        ctx.moveTo(lastX, lastY);
-        ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-      ctx.closePath();
-    }
-
-    function insertTextAt(x, y) {
-      const userText = prompt('Ingresa el texto que deseas agregar a la hoja:');
-      if (!userText || userText.trim() === '') return;
-
-      const ctx = editor.drawCtx;
-      ctx.save();
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.font = `bold ${editor.fontSize * 1.8}px 'Outfit', sans-serif`;
-      ctx.fillStyle = editor.color;
-      ctx.globalAlpha = 1.0;
-      ctx.fillText(userText, x, y);
-      ctx.restore();
-
-      saveCanvasHistory();
-    }
-  }
-
-  function saveCanvasHistory() {
-    const editor = state.editor;
-    const ctx = editor.drawCtx;
-    // Trim forward history if we rewound
-    if (editor.historyStep < editor.history.length - 1) {
-      editor.history = editor.history.slice(0, editor.historyStep + 1);
-    }
-    const imgData = ctx.getImageData(0, 0, editor.drawCanvas.width, editor.drawCanvas.height);
-    editor.history.push(imgData);
-    editor.historyStep = editor.history.length - 1;
-  }
-
-  function undoCanvasStep() {
-    const editor = state.editor;
-    if (editor.historyStep > 0) {
-      editor.historyStep--;
-      const prevData = editor.history[editor.historyStep];
-      editor.drawCtx.putImageData(prevData, 0, 0);
-    } else if (editor.historyStep === 0) {
-      editor.historyStep = -1;
-      editor.drawCtx.clearRect(0, 0, editor.drawCanvas.width, editor.drawCanvas.height);
-    }
-  }
-
-  function saveEditorChanges() {
-    const editor = state.editor;
-    const page = state.pages.find((p) => p.id === editor.activePageId);
-    if (!page) return;
-
-    // Merge background canvas and draw canvas into a composite canvas
-    const mergedCanvas = document.createElement('canvas');
-    mergedCanvas.width = editor.bgCanvas.width;
-    mergedCanvas.height = editor.bgCanvas.height;
-    const mergedCtx = mergedCanvas.getContext('2d');
-
-    // Draw background
-    mergedCtx.drawImage(editor.bgCanvas, 0, 0);
-    // Draw annotations overlay
-    mergedCtx.drawImage(editor.drawCanvas, 0, 0);
-
-    const fullDataUrl = mergedCanvas.toDataURL('image/png');
-
-    // Update page state
-    page.canvasDataUrl = fullDataUrl;
-    page.thumbnailUrl = fullDataUrl;
-    page.isEdited = true;
-
-    // Re-render the grid
-    renderPagesGrid();
-    closeEditorModal();
-    showToast('Cambios guardados exitosamente en la hoja', 'success');
   }
 
   // ==========================================================================
-  // HP LaserJet Pro MFP 4103fdw Scanner Engine
+  // HP Scanner Modal (Ultra Simple & Clean)
   // ==========================================================================
   function setupHpScanner() {
-    // Open / Close handlers
-    if (DOM.btnOpenHpScan) DOM.btnOpenHpScan.addEventListener('click', openHpScanModal);
-    if (DOM.btnHpScanMain) DOM.btnHpScanMain.addEventListener('click', openHpScanModal);
-    if (DOM.btnWorkbenchScanMore) DOM.btnWorkbenchScanMore.addEventListener('click', openHpScanModal);
-    if (DOM.btnMenuHpScan) {
-      DOM.btnMenuHpScan.addEventListener('click', () => {
-        DOM.btnAddPageDropdown.parentElement.classList.remove('open');
-        openHpScanModal();
-      });
-    }
+    // Open/Close triggers
+    DOM.btnOpenHpScan.addEventListener('click', openHpScanModal);
+    DOM.btnHpScanMain.addEventListener('click', openHpScanModal);
+    DOM.btnCloseHpModal.addEventListener('click', closeHpScanModal);
+    DOM.btnCancelHpScan.addEventListener('click', closeHpScanModal);
 
-    if (DOM.btnCloseHpModal) DOM.btnCloseHpModal.addEventListener('click', closeHpScanModal);
-    if (DOM.btnCancelHpScan) DOM.btnCancelHpScan.addEventListener('click', closeHpScanModal);
-
-    // Load saved IP
-    const savedIp = localStorage.getItem('tacala_hp_printer_ip') || '192.168.1.50';
-    if (DOM.hpPrinterIp) DOM.hpPrinterIp.value = savedIp;
-
-    // Load saved Duplex preference & bind persistent change listener
-    const savedDuplex = localStorage.getItem('tacala_hp_duplex') === 'true';
-    if (DOM.hpDuplexCheck) {
-      DOM.hpDuplexCheck.checked = savedDuplex;
-      updateDuplexBadge(savedDuplex);
-      DOM.hpDuplexCheck.addEventListener('change', () => {
-        const isChecked = DOM.hpDuplexCheck.checked;
-        localStorage.setItem('tacala_hp_duplex', isChecked);
-        updateDuplexBadge(isChecked);
-        showToast(`Doble cara ${isChecked ? 'activada' : 'desactivada'} (guardado)`, 'info', 1500);
-      });
-    }
-
-    // Test Connection Button
-    if (DOM.btnTestHpConnection) DOM.btnTestHpConnection.addEventListener('click', testHpConnection);
-
-    // Source Card Radio Click
-    const sourceCards = DOM.hpScanModal ? DOM.hpScanModal.querySelectorAll('.source-card') : [];
-    sourceCards.forEach((card) => {
-      card.addEventListener('click', () => {
-        const groupName = card.querySelector('input[type="radio"]').name;
-        DOM.hpScanModal.querySelectorAll(`input[name="${groupName}"]`).forEach((r) => {
-          r.closest('.source-card').classList.remove('active');
-        });
-        card.classList.add('active');
-        card.querySelector('input[type="radio"]').checked = true;
-      });
+    // Source selection: ADF vs Cristal
+    DOM.cardSourceAdf.addEventListener('click', () => {
+      DOM.cardSourceAdf.classList.add('active');
+      DOM.cardSourcePlaten.classList.remove('active');
+      DOM.cardSourceAdf.querySelector('input').checked = true;
     });
 
-    // Start eSCL Scan
-    if (DOM.btnStartHpScan) DOM.btnStartHpScan.addEventListener('click', startHpNetworkScan);
+    DOM.cardSourcePlaten.addEventListener('click', () => {
+      DOM.cardSourcePlaten.classList.add('active');
+      DOM.cardSourceAdf.classList.remove('active');
+      DOM.cardSourcePlaten.querySelector('input').checked = true;
+      
+      // Platen cannot do duplex physically
+      if (DOM.hpDuplexCheck.checked) {
+        setDuplexState(false);
+        showToast('El cristal solo escanea 1 cara a la vez', 'info', 2500);
+      }
+    });
 
-    // WIA Scan
-    if (DOM.btnScanWia) DOM.btnScanWia.addEventListener('click', startWiaScan);
+    // Duplex selector (1 cara vs 2 caras)
+    DOM.btnDuplexNo.addEventListener('click', () => setDuplexState(false));
+    DOM.btnDuplexYes.addEventListener('click', () => {
+      // If currently Platen, switch to Feeder automatically
+      if (DOM.cardSourcePlaten.classList.contains('active')) {
+        DOM.cardSourceAdf.click();
+      }
+      setDuplexState(true);
+    });
 
-    // Folder Scans Drawer
-    if (DOM.btnRefreshFolderScans) DOM.btnRefreshFolderScans.addEventListener('click', refreshFolderScans);
-    if (DOM.btnToggleFolderScans) {
-      DOM.btnToggleFolderScans.addEventListener('click', () => {
-        DOM.folderFilesList.classList.toggle('hidden');
-        if (!DOM.folderFilesList.classList.contains('hidden')) {
-          refreshFolderScans();
-        }
-      });
-    }
+    // Restore saved duplex preference
+    const savedDuplex = localStorage.getItem('tacala_hp_duplex') === 'true';
+    setDuplexState(savedDuplex);
+
+    // IP Accordion Drawer
+    DOM.btnToggleIpConfig.addEventListener('click', () => {
+      DOM.ipEditDrawer.classList.toggle('hidden');
+    });
+
+    // Restore saved IP
+    const savedIp = localStorage.getItem('tacala_hp_printer_ip') || '192.168.1.50';
+    DOM.hpPrinterIp.value = savedIp;
+    DOM.displayCurrentIpText.textContent = `Impresora en red: ${savedIp}`;
+
+    DOM.hpPrinterIp.addEventListener('input', (e) => {
+      const val = e.target.value.trim();
+      DOM.displayCurrentIpText.textContent = `Impresora en red: ${val || 'Sin IP'}`;
+    });
+
+    // Test connection
+    DOM.btnTestHpConnection.addEventListener('click', testHpConnection);
+
+    // Start network scan
+    DOM.btnStartHpScan.addEventListener('click', startHpNetworkScan);
   }
 
-  function updateDuplexBadge(active) {
-    if (!DOM.duplexStateBadge) return;
-    if (active) {
-      DOM.duplexStateBadge.textContent = 'Activado (Guardado)';
+  function setDuplexState(isDuplex) {
+    DOM.hpDuplexCheck.checked = isDuplex;
+    localStorage.setItem('tacala_hp_duplex', isDuplex ? 'true' : 'false');
+
+    if (isDuplex) {
+      DOM.btnDuplexYes.classList.add('active');
+      DOM.btnDuplexNo.classList.remove('active');
+      DOM.duplexStateBadge.textContent = '2 Caras (Ambos lados)';
       DOM.duplexStateBadge.classList.add('active');
     } else {
-      DOM.duplexStateBadge.textContent = 'Desactivado';
+      DOM.btnDuplexNo.classList.add('active');
+      DOM.btnDuplexYes.classList.remove('active');
+      DOM.duplexStateBadge.textContent = '1 Cara';
       DOM.duplexStateBadge.classList.remove('active');
     }
   }
@@ -1344,7 +778,7 @@ if (typeof pdfjsLib !== 'undefined') {
       const data = await res.json();
 
       if (data.success) {
-        updateHpFeedback('online', `¡HP MFP 4103fdw conectada! (Puerto: ${data.port}, Cama: Sí, ADF: Sí)`);
+        updateHpFeedback('online', `¡HP MFP 4103fdw conectada! (Puerto: ${data.port})`);
         showToast('Impresora HP conectada y lista para escanear', 'success');
       } else {
         updateHpFeedback('error', `Error: ${data.error}`);
@@ -1376,15 +810,15 @@ if (typeof pdfjsLib !== 'undefined') {
 
     localStorage.setItem('tacala_hp_printer_ip', ip);
 
-    const source = DOM.hpScanModal.querySelector('input[name="hpSource"]:checked').value;
-    const colorMode = DOM.hpScanModal.querySelector('input[name="hpColor"]:checked').value;
-    const resolution = parseInt(DOM.hpResolutionSelect.value, 10);
+    const source = DOM.cardSourceAdf.classList.contains('active') ? 'Feeder' : 'Platen';
     const duplex = DOM.hpDuplexCheck.checked && source === 'Feeder';
+    const colorMode = 'Color';
+    const resolution = 300;
 
     // Show laser progress box
     DOM.hpScanProgressBox.classList.remove('hidden');
-    DOM.hpScanProgressTitle.textContent = `Escaneando desde ${source === 'Feeder' ? 'Alimentador ADF' : 'Cama Plana'}...`;
-    DOM.hpScanProgressSubtitle.textContent = `La HP 4103fdw está procesando las hojas ${duplex ? '(Doble cara)' : ''} y transfiriendo a Tacala.`;
+    DOM.hpScanProgressTitle.textContent = `Escaneando desde ${source === 'Feeder' ? 'Alimentador ADF' : 'Cristal'}...`;
+    DOM.hpScanProgressSubtitle.textContent = `La HP 4103fdw está procesando las hojas ${duplex ? '(Doble cara - ambos lados)' : '(1 cara)'}.`;
     DOM.btnStartHpScan.disabled = true;
 
     try {
@@ -1398,7 +832,7 @@ if (typeof pdfjsLib !== 'undefined') {
       if (data.success && data.pages && data.pages.length > 0) {
         await addScannedPages(data.pages);
         closeHpScanModal();
-        showToast(`¡Se agregaron ${data.pages.length} hoja(s) escaneada(s) al documento!`, 'success', 4500);
+        showToast(`¡Se agregaron ${data.pages.length} hoja(s) escaneada(s)!`, 'success', 4500);
       } else {
         showToast(`Error de escaneo: ${data.error || 'No se obtuvieron páginas'}`, 'danger', 5000);
       }
@@ -1407,90 +841,6 @@ if (typeof pdfjsLib !== 'undefined') {
     } finally {
       DOM.btnStartHpScan.disabled = false;
       DOM.hpScanProgressBox.classList.add('hidden');
-    }
-  }
-
-  async function startWiaScan() {
-    DOM.hpScanProgressBox.classList.remove('hidden');
-    DOM.hpScanProgressTitle.textContent = 'Iniciando escáner con driver de Windows (WIA)...';
-    DOM.hpScanProgressSubtitle.textContent = 'Si aparece el cuadro de diálogo de Windows, selecciona tu HP 4103.';
-    DOM.btnScanWia.disabled = true;
-
-    try {
-      const res = await fetch('/api/scanner/wia', { method: 'POST' });
-      const data = await res.json();
-
-      if (data.success && data.pages && data.pages.length > 0) {
-        await addScannedPages(data.pages);
-        closeHpScanModal();
-        showToast('Hoja escaneada correctamente mediante Windows WIA', 'success');
-      } else {
-        showToast(`Error: ${data.error}`, 'danger');
-      }
-    } catch (err) {
-      showToast(`Error al ejecutar WIA: ${err.message}`, 'danger');
-    } finally {
-      DOM.btnScanWia.disabled = false;
-      DOM.hpScanProgressBox.classList.add('hidden');
-    }
-  }
-
-  async function refreshFolderScans() {
-    try {
-      const res = await fetch('/api/scanner/folder-scans');
-      const data = await res.json();
-
-      if (data.success) {
-        DOM.folderFilesList.classList.remove('hidden');
-        DOM.folderFilesList.innerHTML = '';
-
-        if (data.files.length === 0) {
-          DOM.folderFilesList.innerHTML = '<p style="font-size:0.78rem;color:var(--text-muted);padding:0.3rem;">No hay archivos en la carpeta de escaneos aún.</p>';
-          return;
-        }
-
-        data.files.forEach((file) => {
-          const row = document.createElement('div');
-          row.className = 'folder-file-row';
-          const sizeKb = Math.round(file.size / 1024);
-          row.innerHTML = `
-            <div class="folder-file-info">
-              <i class="fa-solid fa-file-image"></i>
-              <span>${escapeHtml(file.filename)} <small style="color:var(--text-muted);">(${sizeKb} KB)</small></span>
-            </div>
-            <button class="btn btn-sm btn-primary btn-import-scan" data-filename="${escapeHtml(file.filename)}">
-              <i class="fa-solid fa-plus"></i> Importar
-            </button>
-          `;
-
-          row.querySelector('.btn-import-scan').addEventListener('click', async () => {
-            await importFolderScan(file.filename);
-          });
-
-          DOM.folderFilesList.appendChild(row);
-        });
-      }
-    } catch (err) {
-      console.error('Error fetching folder scans:', err);
-    }
-  }
-
-  async function importFolderScan(filename) {
-    try {
-      showToast(`Importando ${filename}...`, 'info');
-      const res = await fetch(`/api/scanner/file/${encodeURIComponent(filename)}`);
-      const blob = await res.blob();
-      const file = new File([blob], filename, { type: blob.type });
-
-      if (blob.type.includes('pdf') || filename.endsWith('.pdf')) {
-        await handlePdfFiles([file]);
-      } else {
-        await handleImageFiles([file]);
-      }
-      closeHpScanModal();
-      showToast(`Archivo "${filename}" importado a la mesa de trabajo`, 'success');
-    } catch (err) {
-      showToast(`Error al importar archivo: ${err.message}`, 'danger');
     }
   }
 
@@ -1512,7 +862,7 @@ if (typeof pdfjsLib !== 'undefined') {
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-        const pageCanvasUrl = canvas.toDataURL('image/png');
+        const pageCanvasUrl = canvas.toDataURL('image/jpeg', 0.9);
 
         const pageObj = {
           id: 'page_' + Math.random().toString(36).substring(2, 9),
@@ -1539,7 +889,7 @@ if (typeof pdfjsLib !== 'undefined') {
   }
 
   // ==========================================================================
-  // Deskew / Enderezado de Hojas Chuecas Engine
+  // Deskew / Enderezado de Hojas Chuecas
   // ==========================================================================
   function setupDeskewEngine() {
     const deskew = state.deskew;
@@ -1555,21 +905,10 @@ if (typeof pdfjsLib !== 'undefined') {
       renderDeskewCanvas();
     });
 
-    const quickBtns = DOM.deskewModal.querySelectorAll('.quick-ang-btn');
-    quickBtns.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        deskew.angle = parseFloat(btn.dataset.angle);
-        DOM.deskewSlider.value = deskew.angle;
-        DOM.deskewAngleVal.textContent = `${deskew.angle > 0 ? '+' : ''}${deskew.angle.toFixed(1)}°`;
-        renderDeskewCanvas();
-      });
-    });
-
-    DOM.deskewGridToggle.addEventListener('change', (e) => {
-      DOM.alignmentGridOverlay.classList.toggle('hidden', !e.target.checked);
-    });
-
-    DOM.deskewCropToggle.addEventListener('change', () => {
+    DOM.btnResetDeskewAngle.addEventListener('click', () => {
+      deskew.angle = 0;
+      DOM.deskewSlider.value = 0;
+      DOM.deskewAngleVal.textContent = '0.0°';
       renderDeskewCanvas();
     });
 
@@ -1589,11 +928,7 @@ if (typeof pdfjsLib !== 'undefined') {
     DOM.deskewPageBadge.textContent = `#${pageIdx + 1}`;
 
     const img = new Image();
-    if (page.canvasDataUrl) {
-      img.src = page.canvasDataUrl;
-    } else if (page.thumbnailUrl) {
-      img.src = page.thumbnailUrl;
-    }
+    img.src = page.canvasDataUrl || page.thumbnailUrl;
     await img.decode();
     state.deskew.img = img;
 
@@ -1613,7 +948,6 @@ if (typeof pdfjsLib !== 'undefined') {
 
     const img = deskew.img;
     const angleRad = (deskew.angle * Math.PI) / 180;
-    const crop = DOM.deskewCropToggle.checked;
 
     const w = img.naturalWidth || img.width;
     const h = img.naturalHeight || img.height;
@@ -1630,8 +964,8 @@ if (typeof pdfjsLib !== 'undefined') {
     ctx.translate(w / 2, h / 2);
     ctx.rotate(angleRad);
 
-    // Scale slightly if auto-crop is enabled to hide corner triangles
-    if (crop && Math.abs(deskew.angle) > 0.05) {
+    // Auto-scale slightly to eliminate corner white triangles
+    if (Math.abs(deskew.angle) > 0.05) {
       const scale = 1 + Math.abs(deskew.angle) / 38;
       ctx.scale(scale, scale);
     }
@@ -1645,51 +979,260 @@ if (typeof pdfjsLib !== 'undefined') {
     const page = state.pages.find((p) => p.id === deskew.activePageId);
     if (!page) return;
 
-    const dataUrl = deskew.canvas.toDataURL('image/png');
+    const dataUrl = deskew.canvas.toDataURL('image/jpeg', 0.92);
     page.canvasDataUrl = dataUrl;
     page.thumbnailUrl = dataUrl;
     page.isEdited = true;
 
-    renderPagesGrid();
     closeDeskewModal();
-    showToast('¡Hoja enderezada y actualizada con éxito!', 'success');
+    renderPagesGrid();
+    showToast('Hoja enderezada correctamente', 'success');
   }
 
   // ==========================================================================
-  // Download & Save to PC Folder Engine (PDF-Lib)
+  // Editor Modal (Dibujar, Firma, Resaltar)
   // ==========================================================================
-  function setupDownload() {
-    DOM.btnDownloadPdf.addEventListener('click', exportPdf);
-    if (DOM.btnSaveToFolder) DOM.btnSaveToFolder.addEventListener('click', savePdfToFolder);
+  function setupEditorModal() {
+    const editor = state.editor;
+    editor.bgCanvas = DOM.bgCanvas;
+    editor.bgCtx = DOM.bgCanvas.getContext('2d');
+    editor.drawCanvas = DOM.drawCanvas;
+    editor.drawCtx = DOM.drawCanvas.getContext('2d');
+
+    DOM.btnCloseEditor.addEventListener('click', closeEditorModal);
+    DOM.btnCancelEditor.addEventListener('click', closeEditorModal);
+    DOM.btnSaveEditor.addEventListener('click', saveEditorChanges);
+
+    // Tool selection
+    const toolBtns = DOM.editorModal.querySelectorAll('.tool-icon-btn');
+    toolBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        toolBtns.forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        editor.tool = btn.dataset.tool;
+      });
+    });
+
+    // Swatches
+    const swatches = DOM.editorModal.querySelectorAll('.swatch');
+    swatches.forEach((swatch) => {
+      swatch.addEventListener('click', () => {
+        swatches.forEach((s) => s.classList.remove('active'));
+        swatch.classList.add('active');
+        editor.color = swatch.dataset.color;
+      });
+    });
+
+    DOM.customColorPicker.addEventListener('input', (e) => {
+      editor.color = e.target.value;
+      swatches.forEach((s) => s.classList.remove('active'));
+    });
+
+    // Stroke size
+    DOM.strokeSizeRange.addEventListener('input', (e) => {
+      editor.strokeSize = parseInt(e.target.value, 10);
+      DOM.strokeSizeVal.textContent = `${editor.strokeSize}px`;
+    });
+
+    // Undo
+    DOM.btnUndoCanvas.addEventListener('click', () => {
+      if (editor.historyStep > 0) {
+        editor.historyStep--;
+        const img = new Image();
+        img.src = editor.history[editor.historyStep];
+        img.onload = () => {
+          editor.drawCtx.clearRect(0, 0, editor.drawCanvas.width, editor.drawCanvas.height);
+          editor.drawCtx.drawImage(img, 0, 0);
+        };
+      } else if (editor.historyStep === 0) {
+        editor.historyStep = -1;
+        editor.drawCtx.clearRect(0, 0, editor.drawCanvas.width, editor.drawCanvas.height);
+      }
+    });
+
+    setupCanvasDrawing();
   }
 
-  async function generatePdfBytes() {
-    if (typeof PDFLib === 'undefined') {
-      throw new Error('La biblioteca PDF-Lib no se ha cargado.');
+  function setupCanvasDrawing() {
+    const editor = state.editor;
+    const drawCanvas = editor.drawCanvas;
+
+    let isDrawing = false;
+    let lastX = 0;
+    let lastY = 0;
+
+    function getCoords(e) {
+      const rect = drawCanvas.getBoundingClientRect();
+      const scaleX = drawCanvas.width / rect.width;
+      const scaleY = drawCanvas.height / rect.height;
+      return {
+        x: (e.clientX - rect.left) * scaleX,
+        y: (e.clientY - rect.top) * scaleY
+      };
+    }
+
+    drawCanvas.addEventListener('mousedown', (e) => {
+      if (editor.tool === 'text') {
+        const coords = getCoords(e);
+        const text = prompt('Escribe el texto a insertar:');
+        if (text) {
+          editor.drawCtx.font = `bold ${editor.strokeSize * 6}px sans-serif`;
+          editor.drawCtx.fillStyle = editor.color;
+          editor.drawCtx.fillText(text, coords.x, coords.y);
+          saveDrawHistory();
+        }
+        return;
+      }
+
+      isDrawing = true;
+      const coords = getCoords(e);
+      lastX = coords.x;
+      lastY = coords.y;
+    });
+
+    drawCanvas.addEventListener('mousemove', (e) => {
+      if (!isDrawing) return;
+      const coords = getCoords(e);
+      const ctx = editor.drawCtx;
+
+      ctx.beginPath();
+      ctx.moveTo(lastX, lastY);
+      ctx.lineTo(coords.x, coords.y);
+
+      if (editor.tool === 'eraser') {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.lineWidth = editor.strokeSize * 4;
+      } else if (editor.tool === 'highlighter') {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.strokeStyle = editor.color + '55'; // semi-transparent
+        ctx.lineWidth = editor.strokeSize * 3;
+        ctx.lineCap = 'square';
+      } else {
+        // pen / signature
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.strokeStyle = editor.color;
+        ctx.lineWidth = editor.strokeSize;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+      }
+
+      ctx.stroke();
+      lastX = coords.x;
+      lastY = coords.y;
+    });
+
+    const stopDrawing = () => {
+      if (isDrawing) {
+        isDrawing = false;
+        saveDrawHistory();
+      }
+    };
+
+    drawCanvas.addEventListener('mouseup', stopDrawing);
+    drawCanvas.addEventListener('mouseleave', stopDrawing);
+  }
+
+  function saveDrawHistory() {
+    const editor = state.editor;
+    editor.historyStep++;
+    editor.history = editor.history.slice(0, editor.historyStep);
+    editor.history.push(editor.drawCanvas.toDataURL());
+  }
+
+  async function openEditorModal(pageId) {
+    const page = state.pages.find((p) => p.id === pageId);
+    if (!page) return;
+
+    state.editor.activePageId = pageId;
+    state.editor.history = [];
+    state.editor.historyStep = -1;
+
+    const pageIdx = state.pages.indexOf(page);
+    DOM.modalPageNumberBadge.textContent = `#${pageIdx + 1}`;
+
+    const img = new Image();
+    img.src = page.canvasDataUrl || page.thumbnailUrl;
+    await img.decode();
+
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+
+    DOM.bgCanvas.width = w;
+    DOM.bgCanvas.height = h;
+    DOM.drawCanvas.width = w;
+    DOM.drawCanvas.height = h;
+
+    state.editor.bgCtx.drawImage(img, 0, 0);
+    state.editor.drawCtx.clearRect(0, 0, w, h);
+
+    DOM.editorModal.classList.remove('hidden');
+  }
+
+  function closeEditorModal() {
+    DOM.editorModal.classList.add('hidden');
+    state.editor.activePageId = null;
+  }
+
+  function saveEditorChanges() {
+    const editor = state.editor;
+    const page = state.pages.find((p) => p.id === editor.activePageId);
+    if (!page) return;
+
+    // Merge bgCanvas and drawCanvas
+    const merged = document.createElement('canvas');
+    merged.width = editor.bgCanvas.width;
+    merged.height = editor.bgCanvas.height;
+    const ctx = merged.getContext('2d');
+    ctx.drawImage(editor.bgCanvas, 0, 0);
+    ctx.drawImage(editor.drawCanvas, 0, 0);
+
+    const dataUrl = merged.toDataURL('image/jpeg', 0.92);
+    page.canvasDataUrl = dataUrl;
+    page.thumbnailUrl = dataUrl;
+    page.isEdited = true;
+
+    closeEditorModal();
+    renderPagesGrid();
+    showToast('Anotaciones y cambios guardados', 'success');
+  }
+
+  // ==========================================================================
+  // Direct Save to PC & Download PDF
+  // ==========================================================================
+  function setupSaveAndDownload() {
+    // "Guardar en PC" -> native folder / file picker directly on computer
+    DOM.btnSaveToFolder.addEventListener('click', saveDirectlyToPc);
+
+    // "Descargar" -> standard browser download
+    DOM.btnDownloadPdf.addEventListener('click', downloadPdfFile);
+  }
+
+  async function generateMergedPdfBytes() {
+    if (state.pages.length === 0) {
+      throw new Error('No hay hojas en el documento');
     }
 
     const { PDFDocument, degrees } = PDFLib;
-    const outputPdf = await PDFDocument.create();
+    const mergedDoc = await PDFDocument.create();
 
-    const pdfLibDocCache = new Map();
-    for (const [docId, docInfo] of state.sourceDocuments.entries()) {
-      try {
-        const loadedLibDoc = await PDFDocument.load(docInfo.bytes);
-        pdfLibDocCache.set(docId, loadedLibDoc);
-      } catch (e) {
-        console.warn('Could not parse doc with pdf-lib directly:', e);
-      }
-    }
+    // Cache loaded PDFLib source documents
+    const loadedPdfLibDocs = new Map();
 
-    for (let i = 0; i < state.pages.length; i++) {
-      const page = state.pages[i];
+    for (const page of state.pages) {
+      if (page.isEdited || page.canvasDataUrl || page.type === 'image') {
+        // Embed canvas image
+        const imgUrl = page.canvasDataUrl || page.thumbnailUrl;
+        const imgBytes = await fetch(imgUrl).then((r) => r.arrayBuffer());
 
-      if (page.isEdited || page.type === 'blank' || page.type === 'image' || !page.sourceDocId) {
-        const pngBytes = await fetch(page.canvasDataUrl || page.thumbnailUrl).then((res) => res.arrayBuffer());
-        const pngImage = await outputPdf.embedPng(pngBytes);
+        let embeddedImg;
+        if (imgUrl.startsWith('data:image/png')) {
+          embeddedImg = await mergedDoc.embedPng(imgBytes);
+        } else {
+          embeddedImg = await mergedDoc.embedJpg(imgBytes);
+        }
 
-        const newPage = outputPdf.addPage([page.width, page.height]);
-        newPage.drawImage(pngImage, {
+        const newPdfPage = mergedDoc.addPage([page.width, page.height]);
+        newPdfPage.drawImage(embeddedImg, {
           x: 0,
           y: 0,
           width: page.width,
@@ -1697,141 +1240,132 @@ if (typeof pdfjsLib !== 'undefined') {
         });
 
         if (page.rotation !== 0) {
-          newPage.setRotation(degrees(page.rotation));
+          newPdfPage.setRotation(degrees(page.rotation));
         }
       } else {
-        const srcLibDoc = pdfLibDocCache.get(page.sourceDocId);
-        if (srcLibDoc) {
-          const [copiedPage] = await outputPdf.copyPages(srcLibDoc, [page.sourcePageIndex]);
-          const originalRotation = copiedPage.getRotation().angle || 0;
-          const finalRotation = (originalRotation + page.rotation) % 360;
-          copiedPage.setRotation(degrees(finalRotation));
-          outputPdf.addPage(copiedPage);
-        } else {
-          const pngBytes = await fetch(page.thumbnailUrl).then((res) => res.arrayBuffer());
-          const pngImage = await outputPdf.embedPng(pngBytes);
-          const newPage = outputPdf.addPage([page.width, page.height]);
-          newPage.drawImage(pngImage, {
-            x: 0,
-            y: 0,
-            width: page.width,
-            height: page.height
-          });
-          if (page.rotation !== 0) {
-            newPage.setRotation(degrees(page.rotation));
+        // Copy original vector PDF page
+        const sourceInfo = state.sourceDocuments.get(page.sourceDocId);
+        if (sourceInfo) {
+          if (!loadedPdfLibDocs.has(page.sourceDocId)) {
+            const pdfDoc = await PDFDocument.load(sourceInfo.bytes);
+            loadedPdfLibDocs.set(page.sourceDocId, pdfDoc);
           }
+
+          const pdfDoc = loadedPdfLibDocs.get(page.sourceDocId);
+          const [copiedPage] = await mergedDoc.copyPages(pdfDoc, [page.sourcePageIndex]);
+
+          if (page.rotation !== 0) {
+            const currentRot = copiedPage.getRotation().angle || 0;
+            copiedPage.setRotation(degrees((currentRot + page.rotation) % 360));
+          }
+
+          mergedDoc.addPage(copiedPage);
         }
       }
     }
 
-    return await outputPdf.save();
+    return await mergedDoc.save();
   }
 
-  async function exportPdf() {
+  async function saveDirectlyToPc() {
     if (state.pages.length === 0) {
-      showToast('No hay páginas para descargar', 'danger');
-      return;
-    }
-
-    DOM.btnDownloadPdf.disabled = true;
-    DOM.downloadBtnText.textContent = 'Procesando...';
-    DOM.downloadSpinner.classList.remove('hidden');
-
-    try {
-      const pdfBytes = await generatePdfBytes();
-      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-      const downloadUrl = URL.createObjectURL(blob);
-
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      const timestamp = new Date().toISOString().slice(0, 10);
-      link.download = `tacala-documento-${timestamp}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(downloadUrl);
-
-      showToast('¡Tu PDF ha sido compilado y descargado con éxito!', 'success', 4000);
-    } catch (err) {
-      console.error('Error generating PDF:', err);
-      showToast(`Error al compilar el PDF: ${err.message}`, 'danger');
-    } finally {
-      DOM.btnDownloadPdf.disabled = false;
-      DOM.downloadBtnText.textContent = 'Descargar PDF';
-      DOM.downloadSpinner.classList.add('hidden');
-    }
-  }
-
-  async function savePdfToFolder() {
-    if (state.pages.length === 0) {
-      showToast('No hay páginas en el documento para guardar', 'danger');
+      showToast('No hay hojas para guardar', 'info');
       return;
     }
 
     try {
-      showToast('Generando documento PDF...', 'info', 1800);
-      const pdfBytes = await generatePdfBytes();
+      showToast('Generando PDF para guardar...', 'info', 2000);
+      const pdfBytes = await generateMergedPdfBytes();
       const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-      const defaultName = `tacala-documento-${new Date().toISOString().slice(0, 10)}.pdf`;
 
-      // 1. Try Native Windows File System Access API (showSaveFilePicker)
+      // Check for Native File System Access API (allows picking any PC folder directly)
       if ('showSaveFilePicker' in window) {
         try {
           const handle = await window.showSaveFilePicker({
-            suggestedName: defaultName,
-            types: [{
-              description: 'Documento PDF (*.pdf)',
-              accept: { 'application/pdf': ['.pdf'] }
-            }]
+            suggestedName: `Tacala_Documento_${new Date().toISOString().slice(0, 10)}.pdf`,
+            types: [
+              {
+                description: 'Documento PDF',
+                accept: { 'application/pdf': ['.pdf'] }
+              }
+            ]
           });
+
           const writable = await handle.createWritable();
           await writable.write(blob);
           await writable.close();
 
-          showToast('¡PDF guardado con éxito en la carpeta seleccionada de tu PC!', 'success', 4500);
+          showToast('¡Documento guardado directamente en tu PC con éxito!', 'success', 4000);
           return;
         } catch (pickerErr) {
-          if (pickerErr.name === 'AbortError') return; // User simply pressed cancel in the Windows dialog
-          console.warn('showSaveFilePicker fallback:', pickerErr);
+          // If user cancelled the picker dialog, do nothing
+          if (pickerErr.name === 'AbortError') return;
+          console.warn('File picker error, falling back to download:', pickerErr);
         }
       }
 
-      // 2. Also send a copy to local server documents_guardados
-      try {
-        await fetch('/api/save-document', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/pdf',
-            'x-filename': defaultName
-          },
-          body: blob
-        });
-      } catch (e) {
-        // ignore backend copy error
-      }
-
-      // 3. Fallback to standard save download link
-      const downloadUrl = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = defaultName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(downloadUrl);
-
-      showToast('¡Archivo guardado en tu PC!', 'success', 3500);
+      // Fallback if browser doesn't support File System Access
+      triggerBrowserDownload(blob);
+      showToast('Documento guardado en tu equipo', 'success', 3500);
     } catch (err) {
       console.error('Error saving PDF:', err);
       showToast(`Error al guardar: ${err.message}`, 'danger');
     }
   }
 
-  // Run on DOM Ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
-})();
+  async function downloadPdfFile() {
+    if (state.pages.length === 0) {
+      showToast('No hay hojas para descargar', 'info');
+      return;
+    }
 
+    DOM.downloadBtnText.textContent = 'Procesando...';
+    DOM.downloadSpinner.classList.remove('hidden');
+
+    try {
+      const pdfBytes = await generateMergedPdfBytes();
+      const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+      triggerBrowserDownload(blob);
+      showToast('¡Descarga completada con éxito!', 'success');
+    } catch (err) {
+      console.error('Error downloading PDF:', err);
+      showToast(`Error: ${err.message}`, 'danger');
+    } finally {
+      DOM.downloadBtnText.textContent = 'Descargar';
+      DOM.downloadSpinner.classList.add('hidden');
+    }
+  }
+
+  function triggerBrowserDownload(blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Tacala_Documento_${new Date().toISOString().slice(0, 10)}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 200);
+  }
+
+  // ==========================================================================
+  // Clear Document
+  // ==========================================================================
+  function setupClearHandler() {
+    DOM.btnClearAll.addEventListener('click', () => {
+      if (state.pages.length === 0) return;
+      if (confirm('¿Deseas vaciar la mesa de trabajo y empezar un nuevo documento?')) {
+        state.pages = [];
+        state.sourceDocuments.clear();
+        state.selectedPageIds.clear();
+        renderPagesGrid();
+        updateUIState();
+        showToast('Documento reiniciado', 'info', 2000);
+      }
+    });
+  }
+
+  // Run on page load
+  document.addEventListener('DOMContentLoaded', init);
+})();

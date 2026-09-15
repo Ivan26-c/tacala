@@ -31,7 +31,7 @@ try {
 }
 
 Write-Host "=======================================================" -ForegroundColor Cyan
-Write-Host "  TACALA PDF Studio (Version Nativa Windows - Sin Node) " -ForegroundColor Green
+Write-Host "  TACALA PDF Studio (Servidor Nativo Windows)          " -ForegroundColor Green
 Write-Host "  URL: http://localhost:$Port/                          " -ForegroundColor Yellow
 Write-Host "=======================================================" -ForegroundColor Cyan
 
@@ -62,12 +62,12 @@ while ($listener.IsListening) {
         $reader = New-Object System.IO.StreamReader($req.InputStream)
         $body = $reader.ReadToEnd()
         $json = $body | ConvertFrom-Json
-        $ip = $json.ip
+        $ip = $json.ip.Trim()
 
         try {
             $testUrl = "http://$ip/eSCL/ScannerCapabilities"
             $testReq = [System.Net.WebRequest]::Create($testUrl)
-            $testReq.Timeout = 5000
+            $testReq.Timeout = 6000
             $testRes = $testReq.GetResponse()
             $testRes.Close()
 
@@ -76,7 +76,7 @@ while ($listener.IsListening) {
             $res.ContentType = "application/json"
             $res.OutputStream.Write($buffer, 0, $buffer.Length)
         } catch {
-            $errJson = @{ success = $false; error = "No se pudo conectar con la HP en $ip. Revisa que este encendida." } | ConvertTo-Json
+            $errJson = @{ success = $false; error = "No se pudo conectar con la HP en $ip. Verifica que este encendida y conectada a la red." } | ConvertTo-Json
             $buffer = [System.Text.Encoding]::UTF8.GetBytes($errJson)
             $res.StatusCode = 400
             $res.ContentType = "application/json"
@@ -87,25 +87,50 @@ while ($listener.IsListening) {
     }
 
     # ---------------------------------------------------------
-    # API: Escaneo por Red HP (eSCL)
+    # API: Escaneo por Red HP (eSCL con soporte completo Dúplex)
     # ---------------------------------------------------------
     if ($rawPath -eq "/api/scanner/scan" -and $req.HttpMethod -eq "POST") {
         $reader = New-Object System.IO.StreamReader($req.InputStream)
         $body = $reader.ReadToEnd()
         $params = $body | ConvertFrom-Json
 
-        $ip = $params.ip
-        $source = if ($params.source) { $params.source } else { "Platen" }
+        $ip = $params.ip.Trim()
+        $isDuplex = [bool]$params.duplex
+        
+        # Si es doble cara, debe usar el alimentador (Feeder) obligatoriamente
+        $source = if ($isDuplex) { "Feeder" } elseif ($params.source) { $params.source } else { "Feeder" }
         $color = if ($params.colorMode) { $params.colorMode } else { "RGB24" }
         $resDpi = if ($params.resolution) { [int]$params.resolution } else { 300 }
-        $duplex = if ($params.duplex) { "true" } else { "false" }
+        $duplexStr = if ($isDuplex) { "true" } else { "false" }
 
         $wPx = [math]::Round(8.27 * $resDpi)
         $hPx = [math]::Round(11.69 * $resDpi)
 
-        $xmlPayload = "<?xml version=""1.0"" encoding=""UTF-8""?><scan:ScanSettings xmlns:scan=""http://schemas.hp.com/imaging/escl/2011/05/03"" xmlns:pwg=""http://www.pwg.org/schemas/2010/12/sm""><pwg:Version>2.0</pwg:Version><pwg:ScanRegions><pwg:ScanRegion><pwg:Height>$hPx</pwg:Height><pwg:Width>$wPx</pwg:Width><pwg:XOffset>0</pwg:XOffset><pwg:YOffset>0</pwg:YOffset></pwg:ScanRegion></pwg:ScanRegions><scan:InputSource>$source</scan:InputSource><scan:ColorMode>$color</scan:ColorMode><scan:XResolution>$resDpi</scan:XResolution><scan:YResolution>$resDpi</scan:YResolution><pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat><scan:Duplex>$duplex</scan:Duplex></scan:ScanSettings>"
+        # XML estandar eSCL con directiva de Duplex
+        $xmlPayload = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>$hPx</pwg:Height>
+      <pwg:Width>$wPx</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <scan:InputSource>$source</scan:InputSource>
+  <scan:ColorMode>$color</scan:ColorMode>
+  <scan:XResolution>$resDpi</scan:XResolution>
+  <scan:YResolution>$resDpi</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:Duplex>$duplexStr</scan:Duplex>
+</scan:ScanSettings>
+"@
 
         try {
+            Write-Host "[Tacala] Iniciando escaneo en HP $ip (Origen: $source, Doble cara: $duplexStr)" -ForegroundColor Cyan
+            
             $jobReq = [System.Net.HttpWebRequest]::Create("http://$ip/eSCL/ScanJobs")
             $jobReq.Method = "POST"
             $jobReq.ContentType = "text/xml"
@@ -120,32 +145,74 @@ while ($listener.IsListening) {
             $location = $jobRes.Headers["Location"]
             $jobRes.Close()
 
-            if (-not $location) { throw "No se recibio cabecera de ubicacion de escaneo de la HP." }
+            if (-not $location) { throw "No se recibio identificador del trabajo de escaneo de la impresora." }
 
-            Start-Sleep -Milliseconds 1500
+            # Bucle para descargar TODAS las caras escaneadas (anverso, reverso y hojas siguientes del alimentador)
+            $pagesList = @()
+            $maxPages = if ($source -eq "Feeder") { 60 } else { 1 }
+            $docBaseUrl = if ($location.StartsWith("http")) { "$location/NextDocument" } else { "http://$ip$location/NextDocument" }
 
-            $docUrl = if ($location.StartsWith("http")) { "$location/NextDocument" } else { "http://$ip$location/NextDocument" }
-            $docReq = [System.Net.HttpWebRequest]::Create($docUrl)
-            $docReq.Timeout = 30000
-            $docRes = $docReq.GetResponse()
+            for ($pageNum = 1; $pageNum -le $maxPages; $pageNum++) {
+                Start-Sleep -Milliseconds 1200
+                try {
+                    $docReq = [System.Net.HttpWebRequest]::Create($docBaseUrl)
+                    $docReq.Timeout = 25000
+                    $docRes = $docReq.GetResponse()
 
-            $ms = New-Object System.IO.MemoryStream
-            $docRes.GetResponseStream().CopyTo($ms)
-            $imgBytes = $ms.ToArray()
-            $docRes.Close()
+                    $statusCode = [int]$docRes.StatusCode
+                    if ($statusCode -eq 200) {
+                        $ms = New-Object System.IO.MemoryStream
+                        $docRes.GetResponseStream().CopyTo($ms)
+                        $imgBytes = $ms.ToArray()
+                        $docRes.Close()
 
-            $b64 = [Convert]::ToBase64String($imgBytes)
-            $dataUrl = "data:image/jpeg;base64,$b64"
+                        if ($imgBytes.Length -gt 0) {
+                            $b64 = [Convert]::ToBase64String($imgBytes)
+                            $dataUrl = "data:image/jpeg;base64,$b64"
+                            $pagesList += @{ dataUrl = $dataUrl; type = "image"; filename = "hp4103_pagina_$pageNum.jpg" }
+                            Write-Host "  -> Cara $pageNum escaneada y recibida ($([math]::Round($imgBytes.Length/1024)) KB)" -ForegroundColor Green
+                        }
 
-            $pagesList = @(
-                @{ dataUrl = $dataUrl; type = "image"; filename = "hp_scan.jpg" }
-            )
+                        if ($source -eq "Platen") { break }
+                    } else {
+                        $docRes.Close()
+                        break
+                    }
+                } catch [System.Net.WebException] {
+                    $webEx = $_.Exception
+                    if ($webEx.Response) {
+                        $code = [int]$webEx.Response.StatusCode
+                        # 404 Not Found o 503 indica que ya no hay mas caras o papel en el alimentador
+                        if ($code -eq 404 -or $code -eq 503) {
+                            break
+                        }
+                    }
+                    if ($pageNum -gt 1) { break }
+                    throw
+                }
+            }
 
+            # Limpiar trabajo en la impresora
+            try {
+                $delUrl = if ($location.StartsWith("http")) { $location } else { "http://$ip$location" }
+                $delReq = [System.Net.HttpWebRequest]::Create($delUrl)
+                $delReq.Method = "DELETE"
+                $delReq.Timeout = 5000
+                $delRes = $delReq.GetResponse()
+                $delRes.Close()
+            } catch {}
+
+            if ($pagesList.Count -eq 0) {
+                throw "No se recibieron hojas. Revisa que las hojas esten colocadas en el alimentador o cristal."
+            }
+
+            Write-Host "[Tacala] Escaneo completado con exito. Total caras recibidas: $($pagesList.Count)" -ForegroundColor Green
             $resJson = @{ success = $true; pages = $pagesList } | ConvertTo-Json
             $buffer = [System.Text.Encoding]::UTF8.GetBytes($resJson)
             $res.ContentType = "application/json"
             $res.OutputStream.Write($buffer, 0, $buffer.Length)
         } catch {
+            Write-Host "[Tacala] Error durante el escaneo: $($_.Exception.Message)" -ForegroundColor Red
             $errJson = @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json
             $buffer = [System.Text.Encoding]::UTF8.GetBytes($errJson)
             $res.StatusCode = 500
