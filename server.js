@@ -130,29 +130,38 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   const cleanIp = ip.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   const isHttps = protocol === 'https' || port === 443;
   const isDuplex = Boolean(duplex);
-  // eSCL standard uses 'Adf' (not 'Feeder') for ADF input source
-  const esclSource = (source === 'Feeder' || source === 'Adf') ? 'Adf' : 'Platen';
-  const actualSource = isDuplex ? 'Adf' : esclSource;
+  // For HP eSCL, ADF feeder source is 'Feeder'
+  const actualSource = (source === 'Platen' && !isDuplex) ? 'Platen' : 'Feeder';
+
+  // Check if ADF is empty before attempting scan
+  if (actualSource === 'Feeder') {
+    try {
+      const statusRes = await httpRequest({
+        protocol: isHttps ? 'https:' : 'http:',
+        hostname: cleanIp,
+        port: port,
+        path: '/eSCL/ScannerStatus',
+        method: 'GET',
+        rejectUnauthorized: false
+      });
+      if (statusRes.statusCode === 200) {
+        const sXml = statusRes.data.toString('utf-8');
+        if (sXml.includes('ScannerAdfEmpty')) {
+          throw new Error('La bandeja superior (ADF) está VACÍA. Coloca las hojas en la bandeja superior hasta que la impresora haga un sonidito o detecte el papel antes de hacer clic en Escanear.');
+        }
+      }
+    } catch (e) {
+      if (e.message.includes('VACÍA')) throw e;
+    }
+  }
 
   // Calculate pixel dimensions for standard A4 at target DPI
   // A4 = 8.27 x 11.69 inches
   const widthPx = Math.round(8.27 * resolution);
   const heightPx = Math.round(11.69 * resolution);
 
-  // Build duplex XML tags — include ALL known variations for maximum compatibility
-  let duplexXml = '';
-  if (isDuplex) {
-    duplexXml = `
-  <scan:Duplex>true</scan:Duplex>
-  <scan:DuplexMode>TwoSided</scan:DuplexMode>
-  <scan:AdfOptions>
-    <scan:AdfOption>Duplex</scan:AdfOption>
-  </scan:AdfOptions>`;
-  } else {
-    duplexXml = `
-  <scan:Duplex>false</scan:Duplex>
-  <scan:DuplexMode>OneSided</scan:DuplexMode>`;
-  }
+  // HP eSCL native duplex tag
+  const duplexStr = isDuplex ? 'true' : 'false';
 
   const xmlPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -170,7 +179,8 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   <scan:ColorMode>${colorMode}</scan:ColorMode>
   <scan:XResolution>${resolution}</scan:XResolution>
   <scan:YResolution>${resolution}</scan:YResolution>
-  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>${duplexXml}
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:Duplex>${duplexStr}</scan:Duplex>
 </scan:ScanSettings>`;
 
   console.log(`[Tacala] ===== XML PAYLOAD ENVIADO =====`);
@@ -221,7 +231,7 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
     let gotPage = false;
     let retries = 0;
     // Give more time for duplex: printer needs to flip pages or process 2nd CIS sensor
-    const maxRetriesForPage = pageNum === 1 ? 25 : (isDuplex ? 25 : 15);
+    const maxRetriesForPage = pageNum === 1 ? 30 : (isDuplex ? 30 : 15);
 
     while (retries < maxRetriesForPage) {
       await new Promise((r) => setTimeout(r, 1200));

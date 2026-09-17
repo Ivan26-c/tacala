@@ -881,24 +881,23 @@ if (typeof pdfjsLib !== 'undefined') {
       }
 
       // Duplex Support Alert
-      if (d.summary.canDoDuplex) {
-        html += `<div class="diag-alert diag-alert-info">
-          <i class="fa-solid fa-circle-info"></i>
-          <div><strong>Doble Cara Automática Soportada:</strong> Tu HP permite escanear ambos lados en una sola pasada. Tacala enviará los comandos <code>TwoSided</code> y <code>AdfOption: Duplex</code>.</div>
+      if (ds.hasDuplexTag || d.summary.canDoDuplex) {
+        html += `<div class="diag-alert diag-alert-success">
+          <i class="fa-solid fa-circle-check"></i>
+          <div><strong>Doble Cara Compatible:</strong> Tu impresora HP utiliza la directiva oficial nativa <code>&lt;scan:Duplex&gt;true&lt;/scan:Duplex&gt;</code>. Tacala la configurará automáticamente.</div>
         </div>`;
       } else {
         html += `<div class="diag-alert diag-alert-warning">
           <i class="fa-solid fa-circle-question"></i>
-          <div><strong>Soporte Dúplex no confirmado:</strong> El escáner no reportó explícitamente tags de dúplex estándar. Se intentará escaneo con parámetros extendidos.</div>
+          <div><strong>Soporte Dúplex no confirmado:</strong> El escáner no reportó tags de dúplex estándar.</div>
         </div>`;
       }
 
       // Technical Details
       html += '<div class="diag-section-title">📋 Especificaciones eSCL Dúplex</div>';
-      html += `<div class="diag-row"><span class="diag-label">Tag "Duplex"</span>${yesNo(ds.hasDuplexTag)}</div>`;
-      html += `<div class="diag-row"><span class="diag-label">Tag "DuplexMode"</span>${yesNo(ds.hasDuplexMode)}</div>`;
-      html += `<div class="diag-row"><span class="diag-label">Tag "TwoSided"</span>${yesNo(ds.hasTwoSided)}</div>`;
-      html += `<div class="diag-row"><span class="diag-label">Tag "AdfOption / AdfOptions"</span>${yesNo(ds.hasAdfOption || ds.hasAdfOptions)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Directiva "Duplex" (Oficial HP)</span>${yesNo(ds.hasDuplexTag)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Tag "DuplexMode" (Opcional en HP)</span><span class="diag-value" style="color:#94a3b8;">No requerido</span></div>`;
+      html += `<div class="diag-row"><span class="diag-label">Tag "TwoSided" (Opcional en HP)</span><span class="diag-value" style="color:#94a3b8;">No requerido</span></div>`;
       html += `<div class="diag-row"><span class="diag-label">Capacidades ADF Duplex</span>${yesNo(ds.hasAdfDuplexCaps)}</div>`;
 
       html += '<div class="diag-section-title">🖨️ Bandejas de Entrada</div>';

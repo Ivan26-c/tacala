@@ -246,41 +246,16 @@ while ($listener.IsListening) {
         $isDuplex = [bool]$params.duplex
         $reqSource = if ($params.source) { $params.source } else { "Feeder" }
 
-        # Detectar que origen acepta la impresora (Adf o Feeder)
-        $inputSource = "Adf"
-        try {
-            $capReq = [System.Net.HttpWebRequest]::Create("http://$ip/eSCL/ScannerCapabilities")
-            $capReq.Timeout = 3000
-            $capRes = $capReq.GetResponse()
-            $capSr = New-Object System.IO.StreamReader($capRes.GetResponseStream())
-            $capXml = $capSr.ReadToEnd()
-            $capRes.Close()
-
-            if ($capXml -match "<[^>]*InputSource[^>]*>Feeder<" -and -not ($capXml -match "<[^>]*InputSource[^>]*>Adf<")) {
-                $inputSource = "Feeder"
-            }
-        } catch {}
-
-        # Si el usuario eligio Platen (cristal) y NO es duplex:
-        $actualSource = if ($reqSource -eq "Platen" -and -not $isDuplex) { "Platen" } else { $inputSource }
+        # Para HP, el alimentador superior en eSCL es "Feeder"
+        $actualSource = if ($reqSource -eq "Platen" -and -not $isDuplex) { "Platen" } else { "Feeder" }
         $color = if ($params.colorMode) { $params.colorMode } else { "RGB24" }
         $resDpi = if ($params.resolution) { [int]$params.resolution } else { 300 }
+        $duplexStr = if ($isDuplex) { "true" } else { "false" }
 
         $wPx = [math]::Round(8.27 * $resDpi)
         $hPx = [math]::Round(11.69 * $resDpi)
 
-        # XML estandar eSCL con todas las directivas requeridas para Duplex en HP
-        $duplexXml = if ($isDuplex) { @"
-  <scan:Duplex>true</scan:Duplex>
-  <scan:DuplexMode>TwoSided</scan:DuplexMode>
-  <scan:AdfOptions>
-    <scan:AdfOption>Duplex</scan:AdfOption>
-  </scan:AdfOptions>
-"@ } else { @"
-  <scan:Duplex>false</scan:Duplex>
-  <scan:DuplexMode>OneSided</scan:DuplexMode>
-"@ }
-
+        # XML estandar eSCL para HP (usa directiva nativa scan:Duplex)
         $xmlPayload = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -299,12 +274,29 @@ while ($listener.IsListening) {
   <scan:XResolution>$resDpi</scan:XResolution>
   <scan:YResolution>$resDpi</scan:YResolution>
   <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
-$duplexXml
+  <scan:Duplex>$duplexStr</scan:Duplex>
 </scan:ScanSettings>
 "@
 
         try {
-            Write-Host "[Tacala] Iniciando escaneo en HP $ip (Origen: $actualSource, Doble cara: $isDuplex)" -ForegroundColor Cyan
+            # Verificacion previa: Si se escanea con Feeder (ADF), comprobar si hay hojas
+            if ($actualSource -eq "Feeder") {
+                try {
+                    $chkReq = [System.Net.HttpWebRequest]::Create("http://$ip/eSCL/ScannerStatus")
+                    $chkReq.Timeout = 3000
+                    $chkRes = $chkReq.GetResponse()
+                    $chkSr = New-Object System.IO.StreamReader($chkRes.GetResponseStream())
+                    $chkXml = $chkSr.ReadToEnd()
+                    $chkRes.Close()
+                    if ($chkXml -match "<[^>]*AdfState[^>]*>ScannerAdfEmpty<") {
+                        throw "La bandeja superior (ADF) está VACÍA. Coloca las hojas en la bandeja superior hasta que la impresora haga un sonidito o detecte el papel antes de hacer clic en Escanear."
+                    }
+                } catch [System.Management.Automation.RuntimeException] {
+                    throw $_
+                } catch {}
+            }
+
+            Write-Host "[Tacala] Iniciando escaneo en HP $($ip) (Origen: $actualSource, Doble cara: $isDuplex)" -ForegroundColor Cyan
             Write-Host "[Tacala] Enviando ScanSettings eSCL..." -ForegroundColor DarkGray
             
             $jobReq = [System.Net.HttpWebRequest]::Create("http://$ip/eSCL/ScanJobs")
@@ -324,7 +316,7 @@ $duplexXml
             if (-not $location) { throw "No se recibio identificador del trabajo de escaneo de la impresora." }
 
             # Bucle inteligente para descargar TODAS las caras escaneadas
-            # En duplex, la impresora procesa ambas caras y responde 503 o espera entre caras.
+            # En duplex, la impresora procesa ambas caras y responde 503 o 404 mientras procesa la cara 2.
             $pagesList = @()
             $maxPages = if ($actualSource -eq "Platen") { 1 } else { if ($isDuplex) { 100 } else { 50 } }
             $docBaseUrl = if ($location.StartsWith("http")) { "$location/NextDocument" } else { "http://$ip$location/NextDocument" }
@@ -333,7 +325,8 @@ $duplexXml
             for ($pageNum = 1; $pageNum -le $maxPages; $pageNum++) {
                 $gotPage = $false
                 $retries = 0
-                $maxRetriesForPage = if ($pageNum -eq 1) { 25 } elseif ($isDuplex -and ($pageNum % 2 -eq 0)) { 25 } else { 15 }
+                # En duplex, la cara 2 (reverso) tarda en voltearse o procesarse: permitir hasta 30 reintentos
+                $maxRetriesForPage = if ($pageNum -eq 1) { 30 } elseif ($isDuplex -and ($pageNum % 2 -eq 0)) { 30 } else { 15 }
                 $consecutive404 = 0
 
                 while ($retries -lt $maxRetriesForPage) {
@@ -383,12 +376,12 @@ $duplexXml
                                 Write-Host "  [HP 4103] Cara $pageNum esperando... (404 intento $consecutive404)" -ForegroundColor DarkGray
 
                                 if ($pagesList.Count -gt 0) {
-                                    # Si es duplex y acabamos de recibir una cara impar, estamos esperando la segunda cara de la misma hoja:
+                                    # Si es duplex y acabamos de recibir una cara impar (1, 3, 5...), estamos esperando el REVERSO de la misma hoja:
                                     $waitingForBackSide = ($isDuplex -and ($pagesList.Count % 2 -ne 0))
-                                    $threshold404 = if ($waitingForBackSide) { 10 } else { 3 }
+                                    $threshold404 = if ($waitingForBackSide) { 12 } else { 3 }
 
                                     if ($consecutive404 -ge $threshold404) {
-                                        # Consultar el estado del trabajo para estar 100% seguros
+                                        # Consultar el estado del trabajo para no cortar antes de tiempo
                                         $jobDone = $true
                                         try {
                                             $jReq = [System.Net.HttpWebRequest]::Create($jobStatusUrl)
@@ -439,6 +432,36 @@ $duplexXml
             Write-Host "[Tacala] Escaneo completado con exito. Total caras recibidas: $($pagesList.Count)" -ForegroundColor Green
             $resJson = @{ success = $true; pages = $pagesList } | ConvertTo-Json
             $buffer = [System.Text.Encoding]::UTF8.GetBytes($resJson)
+            $res.ContentType = "application/json"
+            $res.OutputStream.Write($buffer, 0, $buffer.Length)
+        } catch [System.Net.WebException] {
+            $webEx = $_.Exception
+            $statusCode = 500
+            $errorMsg = $webEx.Message
+
+            if ($webEx.Response) {
+                $httpRes = [System.Net.HttpWebResponse]$webEx.Response
+                $statusCode = [int]$httpRes.StatusCode
+                try {
+                    $s = $httpRes.GetResponseStream()
+                    $sr = New-Object System.IO.StreamReader($s)
+                    $body = $sr.ReadToEnd()
+                    $sr.Close()
+                    Write-Host "[Tacala] Respuesta de error de la impresora ($statusCode): $body" -ForegroundColor Red
+                    if ($body -match "<[^>]*Reason[^>]*>([^<]+)<") {
+                        $errorMsg = "La impresora respondió: $($matches[1].Trim())"
+                    }
+                } catch {}
+            }
+
+            if ($statusCode -eq 409) {
+                $errorMsg = "Error 409 (Conflicto en la impresora): La impresora rechazó la orden. Revisa que las hojas estén bien colocadas en el alimentador superior (ADF) y que no haya ningún trabajo previo atascado."
+            }
+
+            Write-Host "[Tacala] Error durante el escaneo: $errorMsg" -ForegroundColor Red
+            $errJson = @{ success = $false; error = $errorMsg } | ConvertTo-Json
+            $buffer = [System.Text.Encoding]::UTF8.GetBytes($errJson)
+            $res.StatusCode = 500
             $res.ContentType = "application/json"
             $res.OutputStream.Write($buffer, 0, $buffer.Length)
         } catch {
