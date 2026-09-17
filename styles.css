@@ -1178,9 +1178,10 @@ body {
   background: rgba(15, 23, 42, 0.7);
   border-bottom: 1px solid var(--border-glass);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 1.5rem;
+  gap: 1rem;
 }
 
 .angle-display-box {
@@ -1218,6 +1219,69 @@ body {
   cursor: pointer;
 }
 
+/* Offset Controls: Move content X/Y */
+.offset-controls-section {
+  width: 100%;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-glass);
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.offset-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem !important;
+  color: #a78bfa !important;
+}
+
+.offset-section-title i {
+  font-size: 0.9rem;
+  color: #8b5cf6;
+}
+
+.offset-slider-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.offset-slider-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.offset-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.offset-label {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.offset-value {
+  font-family: monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #a78bfa;
+  background: rgba(139, 92, 246, 0.15);
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  min-width: 50px;
+  text-align: center;
+}
+
+.offset-slider-group .clean-slider {
+  accent-color: #8b5cf6;
+}
+
 .deskew-canvas-container {
   flex: 1;
   background: #060911;
@@ -1234,6 +1298,7 @@ body {
   box-shadow: 0 15px 40px rgba(0, 0, 0, 0.8);
   background: #ffffff;
   border-radius: 4px;
+  overflow: hidden;
 }
 
 #deskewCanvas {

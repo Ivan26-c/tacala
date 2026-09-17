@@ -24,6 +24,8 @@ if (typeof pdfjsLib !== 'undefined') {
     deskew: {
       activePageId: null,
       angle: 0,
+      offsetX: 0,
+      offsetY: 0,
       img: null,
       canvas: null,
       ctx: null
@@ -118,6 +120,10 @@ if (typeof pdfjsLib !== 'undefined') {
     btnResetDeskewAngle: document.getElementById('btnResetDeskewAngle'),
     deskewCanvas: document.getElementById('deskewCanvas'),
     alignmentGridOverlay: document.getElementById('alignmentGridOverlay'),
+    offsetXSlider: document.getElementById('offsetXSlider'),
+    offsetYSlider: document.getElementById('offsetYSlider'),
+    offsetXVal: document.getElementById('offsetXVal'),
+    offsetYVal: document.getElementById('offsetYVal'),
 
     // Editor Modal
     editorModal: document.getElementById('editorModal'),
@@ -902,16 +908,38 @@ if (typeof pdfjsLib !== 'undefined') {
     DOM.btnCloseDeskew.addEventListener('click', closeDeskewModal);
     DOM.btnCancelDeskew.addEventListener('click', closeDeskewModal);
 
+    // Angle slider
     DOM.deskewSlider.addEventListener('input', (e) => {
       deskew.angle = parseFloat(e.target.value);
       DOM.deskewAngleVal.textContent = `${deskew.angle > 0 ? '+' : ''}${deskew.angle.toFixed(1)}°`;
       renderDeskewCanvas();
     });
 
+    // Offset X slider (move content left/right)
+    DOM.offsetXSlider.addEventListener('input', (e) => {
+      deskew.offsetX = parseInt(e.target.value, 10);
+      DOM.offsetXVal.textContent = `${deskew.offsetX > 0 ? '+' : ''}${deskew.offsetX}px`;
+      renderDeskewCanvas();
+    });
+
+    // Offset Y slider (move content up/down)
+    DOM.offsetYSlider.addEventListener('input', (e) => {
+      deskew.offsetY = parseInt(e.target.value, 10);
+      DOM.offsetYVal.textContent = `${deskew.offsetY > 0 ? '+' : ''}${deskew.offsetY}px`;
+      renderDeskewCanvas();
+    });
+
+    // Reset all: angle + offsets
     DOM.btnResetDeskewAngle.addEventListener('click', () => {
       deskew.angle = 0;
+      deskew.offsetX = 0;
+      deskew.offsetY = 0;
       DOM.deskewSlider.value = 0;
       DOM.deskewAngleVal.textContent = '0.0°';
+      DOM.offsetXSlider.value = 0;
+      DOM.offsetYSlider.value = 0;
+      DOM.offsetXVal.textContent = '0px';
+      DOM.offsetYVal.textContent = '0px';
       renderDeskewCanvas();
     });
 
@@ -924,8 +952,14 @@ if (typeof pdfjsLib !== 'undefined') {
 
     state.deskew.activePageId = pageId;
     state.deskew.angle = 0;
+    state.deskew.offsetX = 0;
+    state.deskew.offsetY = 0;
     DOM.deskewSlider.value = 0;
     DOM.deskewAngleVal.textContent = '0.0°';
+    DOM.offsetXSlider.value = 0;
+    DOM.offsetYSlider.value = 0;
+    DOM.offsetXVal.textContent = '0px';
+    DOM.offsetYVal.textContent = '0px';
 
     const pageIdx = state.pages.indexOf(page);
     DOM.deskewPageBadge.textContent = `#${pageIdx + 1}`;
@@ -964,7 +998,8 @@ if (typeof pdfjsLib !== 'undefined') {
     ctx.fillRect(0, 0, w, h);
 
     ctx.save();
-    ctx.translate(w / 2, h / 2);
+    // Move to center, apply offset, then rotate
+    ctx.translate(w / 2 + deskew.offsetX, h / 2 + deskew.offsetY);
     ctx.rotate(angleRad);
 
     // Auto-scale slightly to eliminate corner white triangles

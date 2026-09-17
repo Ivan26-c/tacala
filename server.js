@@ -130,13 +130,21 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   const cleanIp = ip.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   const isHttps = protocol === 'https' || port === 443;
   const isDuplex = Boolean(duplex);
-  const actualSource = isDuplex ? 'Feeder' : (source || 'Feeder');
-  const duplexStr = isDuplex ? 'true' : 'false';
+  // eSCL standard uses 'Adf' (not 'Feeder') for ADF input source
+  const esclSource = (source === 'Feeder' || source === 'Adf') ? 'Adf' : 'Platen';
+  const actualSource = isDuplex ? 'Adf' : esclSource;
 
   // Calculate pixel dimensions for standard A4 at target DPI
   // A4 = 8.27 x 11.69 inches
   const widthPx = Math.round(8.27 * resolution);
   const heightPx = Math.round(11.69 * resolution);
+
+  // Build duplex XML tags only when needed (eSCL standard)
+  const duplexXml = isDuplex ? `
+  <scan:DuplexMode>TwoSided</scan:DuplexMode>
+  <scan:AdfOptions>
+    <scan:AdfOption>Duplex</scan:AdfOption>
+  </scan:AdfOptions>` : '';
 
   const xmlPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -154,8 +162,7 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   <scan:ColorMode>${colorMode}</scan:ColorMode>
   <scan:XResolution>${resolution}</scan:XResolution>
   <scan:YResolution>${resolution}</scan:YResolution>
-  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
-  <scan:Duplex>${duplexStr}</scan:Duplex>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>${duplexXml}
 </scan:ScanSettings>`;
 
   // 1. Create Scan Job
@@ -190,13 +197,15 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
 
   // 2. Poll & Download Scanned Pages with Duplex Retry Loop
   const scannedPages = [];
-  const maxPages = source === 'Feeder' ? 60 : 1;
+  // Duplex doubles effective pages; increase max for ADF
+  const maxPages = (actualSource === 'Adf' || source === 'Feeder') ? (isDuplex ? 120 : 60) : 1;
 
   let consecutive404 = 0;
   for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
     let gotPage = false;
     let retries = 0;
-    const maxRetriesForPage = pageNum === 1 ? 20 : 15;
+    // Give more time for duplex: printer needs to flip pages
+    const maxRetriesForPage = pageNum === 1 ? 25 : (isDuplex ? 20 : 15);
 
     while (retries < maxRetriesForPage) {
       await new Promise((r) => setTimeout(r, 1200));
@@ -234,13 +243,19 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
           consecutive404 = 0;
           break;
         } else if (docRes.statusCode === 503) {
-          // 503 = Impresora volteando la hoja o procesando la siguiente cara!
+          // 503 = Printer is flipping the page or processing next side (very common in duplex)
           console.log(`[Tacala] Procesando cara ${pageNum} (impresora volteando hoja - 503)... esperando (${retries + 1})`);
+          // Wait longer during duplex for page flip
+          if (isDuplex) {
+            await new Promise((r) => setTimeout(r, 800));
+          }
           retries++;
           continue;
         } else if (docRes.statusCode === 404) {
           consecutive404++;
-          if (scannedPages.length > 0 && consecutive404 >= 2) {
+          // Be more patient with duplex: back sides take longer
+          const maxConsecutive404 = isDuplex ? 4 : 2;
+          if (scannedPages.length > 0 && consecutive404 >= maxConsecutive404) {
             break;
           }
           retries++;
@@ -257,7 +272,7 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
       break;
     }
 
-    if (source === 'Platen') break;
+    if (actualSource === 'Platen') break;
   }
 
   // 3. Delete / Finish scan job
