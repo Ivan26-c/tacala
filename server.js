@@ -139,12 +139,20 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   const widthPx = Math.round(8.27 * resolution);
   const heightPx = Math.round(11.69 * resolution);
 
-  // Build duplex XML tags only when needed (eSCL standard)
-  const duplexXml = isDuplex ? `
+  // Build duplex XML tags — include ALL known variations for maximum compatibility
+  let duplexXml = '';
+  if (isDuplex) {
+    duplexXml = `
+  <scan:Duplex>true</scan:Duplex>
   <scan:DuplexMode>TwoSided</scan:DuplexMode>
   <scan:AdfOptions>
     <scan:AdfOption>Duplex</scan:AdfOption>
-  </scan:AdfOptions>` : '';
+  </scan:AdfOptions>`;
+  } else {
+    duplexXml = `
+  <scan:Duplex>false</scan:Duplex>
+  <scan:DuplexMode>OneSided</scan:DuplexMode>`;
+  }
 
   const xmlPayload = `<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -165,6 +173,10 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>${duplexXml}
 </scan:ScanSettings>`;
 
+  console.log(`[Tacala] ===== XML PAYLOAD ENVIADO =====`);
+  console.log(xmlPayload);
+  console.log(`[Tacala] ================================`);
+
   // 1. Create Scan Job
   const createJobOptions = {
     protocol: isHttps ? 'https:' : 'http:',
@@ -180,8 +192,12 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   };
 
   const jobRes = await httpRequest(createJobOptions, xmlPayload);
+  console.log(`[Tacala] Respuesta crear job: HTTP ${jobRes.statusCode}`);
+  console.log(`[Tacala] Headers respuesta:`, JSON.stringify(jobRes.headers, null, 2));
   if (jobRes.statusCode !== 201) {
-    throw new Error(`La impresora respondió con código ${jobRes.statusCode}: ${jobRes.data.toString('utf-8')}`);
+    const responseBody = jobRes.data.toString('utf-8');
+    console.error(`[Tacala] Error body:`, responseBody);
+    throw new Error(`La impresora respondió con código ${jobRes.statusCode}: ${responseBody}`);
   }
 
   const locationHeader = jobRes.headers['location'] || jobRes.headers['Location'];
@@ -204,8 +220,8 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
     let gotPage = false;
     let retries = 0;
-    // Give more time for duplex: printer needs to flip pages
-    const maxRetriesForPage = pageNum === 1 ? 25 : (isDuplex ? 20 : 15);
+    // Give more time for duplex: printer needs to flip pages or process 2nd CIS sensor
+    const maxRetriesForPage = pageNum === 1 ? 25 : (isDuplex ? 25 : 15);
 
     while (retries < maxRetriesForPage) {
       await new Promise((r) => setTimeout(r, 1200));
@@ -244,8 +260,7 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
           break;
         } else if (docRes.statusCode === 503) {
           // 503 = Printer is flipping the page or processing next side (very common in duplex)
-          console.log(`[Tacala] Procesando cara ${pageNum} (impresora volteando hoja - 503)... esperando (${retries + 1})`);
-          // Wait longer during duplex for page flip
+          console.log(`[Tacala] Procesando cara ${pageNum} (impresora ocupada - 503)... esperando (${retries + 1})`);
           if (isDuplex) {
             await new Promise((r) => setTimeout(r, 800));
           }
@@ -253,10 +268,39 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
           continue;
         } else if (docRes.statusCode === 404) {
           consecutive404++;
-          // Be more patient with duplex: back sides take longer
-          const maxConsecutive404 = isDuplex ? 4 : 2;
-          if (scannedPages.length > 0 && consecutive404 >= maxConsecutive404) {
-            break;
+          console.log(`[Tacala] Cara ${pageNum} esperando... (404 intento ${consecutive404})`);
+
+          if (scannedPages.length > 0) {
+            // If waiting for the back side of an already scanned sheet, wait longer
+            const isWaitingBackSide = isDuplex && (scannedPages.length % 2 !== 0);
+            const threshold404 = isWaitingBackSide ? 10 : 3;
+
+            if (consecutive404 >= threshold404) {
+              // Verify JobState via jobPath
+              let stillProcessing = false;
+              try {
+                const jobStateRes = await httpRequest({
+                  protocol: isHttps ? 'https:' : 'http:',
+                  hostname: cleanIp,
+                  port: port,
+                  path: jobPath,
+                  method: 'GET',
+                  rejectUnauthorized: false
+                });
+                if (jobStateRes.statusCode === 200) {
+                  const stateXml = jobStateRes.data.toString('utf-8');
+                  if (stateXml.includes('Processing')) {
+                    stillProcessing = true;
+                    console.log(`[Tacala] El trabajo sigue en 'Processing'. Continuando espera...`);
+                  }
+                }
+              } catch (e) {}
+
+              if (!stillProcessing) {
+                console.log(`[Tacala] Fin del trabajo de escaneo detectado.`);
+                break;
+              }
+            }
           }
           retries++;
           continue;
@@ -368,6 +412,155 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify(result));
       } catch (err) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // --------------------------------------------------------------------------
+  // API: Diagnóstico Completo de Capacidades de Escaneo Duplex
+  // --------------------------------------------------------------------------
+  if (pathname === '/api/scanner/diagnose' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => body += chunk);
+    req.on('end', async () => {
+      try {
+        const { ip } = JSON.parse(body || '{}');
+        if (!ip) throw new Error('Debes proporcionar la dirección IP.');
+        const cleanIp = ip.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+
+        const diagnosis = {
+          ip: cleanIp,
+          timestamp: new Date().toISOString(),
+          capabilities: null,
+          scannerStatus: null,
+          duplexSupport: {},
+          adfInfo: {},
+          rawCapabilitiesXml: null,
+          errors: []
+        };
+
+        // 1. Fetch ScannerCapabilities
+        const ports = [80, 8080, 443];
+        let capsXml = null;
+        let usedPort = 80;
+        let usedProtocol = 'http';
+
+        for (const port of ports) {
+          try {
+            const isHttps = port === 443;
+            const capRes = await httpRequest({
+              protocol: isHttps ? 'https:' : 'http:',
+              hostname: cleanIp,
+              port: port,
+              path: '/eSCL/ScannerCapabilities',
+              method: 'GET',
+              headers: { 'Accept': 'text/xml, application/xml' },
+              rejectUnauthorized: false
+            });
+            if (capRes.statusCode >= 200 && capRes.statusCode < 300) {
+              capsXml = capRes.data.toString('utf-8');
+              usedPort = port;
+              usedProtocol = isHttps ? 'https' : 'http';
+              break;
+            }
+          } catch (e) {
+            diagnosis.errors.push(`Puerto ${port}: ${e.message}`);
+          }
+        }
+
+        if (!capsXml) {
+          throw new Error('No se pudo obtener ScannerCapabilities de la impresora.');
+        }
+
+        diagnosis.rawCapabilitiesXml = capsXml;
+
+        // 2. Parse duplex-related tags
+        const xmlLower = capsXml.toLowerCase();
+        
+        // Check for ADF support
+        diagnosis.adfInfo.hasAdf = xmlLower.includes('adf') || xmlLower.includes('feeder');
+        diagnosis.adfInfo.hasPlaten = xmlLower.includes('platen');
+        
+        // Check all duplex-related tags
+        diagnosis.duplexSupport.hasDuplexTag = xmlLower.includes('duplex');
+        diagnosis.duplexSupport.hasDuplexMode = xmlLower.includes('duplexmode');
+        diagnosis.duplexSupport.hasTwoSided = xmlLower.includes('twosided');
+        diagnosis.duplexSupport.hasAdfOption = xmlLower.includes('adfoption');
+        diagnosis.duplexSupport.hasAdfOptions = xmlLower.includes('adfoptions');
+        diagnosis.duplexSupport.hasDuplexSupported = xmlLower.includes('duplexsupported');
+        
+        // Extract specific duplex section text
+        const duplexMatches = capsXml.match(/[\s\S]*?[Dd]uplex[\s\S]*?/gi);
+        diagnosis.duplexSupport.rawDuplexLines = [];
+        if (duplexMatches) {
+          // Find lines containing 'duplex' (case insensitive)
+          const lines = capsXml.split('\n');
+          lines.forEach((line, idx) => {
+            if (line.toLowerCase().includes('duplex') || line.toLowerCase().includes('adfoption')) {
+              diagnosis.duplexSupport.rawDuplexLines.push({ line: idx + 1, content: line.trim() });
+            }
+          });
+        }
+
+        // Extract ADF section
+        const adfSectionMatch = capsXml.match(/<[^>]*[Aa]df[^>]*>[\s\S]*?<\/[^>]*[Aa]df[^>]*>/gi);
+        diagnosis.adfInfo.rawAdfSections = adfSectionMatch || [];
+
+        // Extract InputSource options
+        const inputSourceMatches = capsXml.match(/<[^>]*InputSource[^>]*>[^<]*<\/[^>]*InputSource[^>]*>/gi);
+        diagnosis.adfInfo.inputSources = inputSourceMatches || [];
+
+        // 3. Fetch ScannerStatus
+        try {
+          const statusRes = await httpRequest({
+            protocol: usedProtocol === 'https' ? 'https:' : 'http:',
+            hostname: cleanIp,
+            port: usedPort,
+            path: '/eSCL/ScannerStatus',
+            method: 'GET',
+            headers: { 'Accept': 'text/xml, application/xml' },
+            rejectUnauthorized: false
+          });
+          if (statusRes.statusCode === 200) {
+            diagnosis.scannerStatus = statusRes.data.toString('utf-8');
+          }
+        } catch (e) {
+          diagnosis.errors.push(`ScannerStatus: ${e.message}`);
+        }
+
+        // Extract Model and ADF sensor state
+        const modelMatch = capsXml.match(/<[^>]*MakeAndModel[^>]*>([^<]+)</i);
+        diagnosis.model = modelMatch ? modelMatch[1].trim() : 'HP Multifuncional';
+
+        if (diagnosis.scannerStatus) {
+          const adfMatch = diagnosis.scannerStatus.match(/<[^>]*AdfState[^>]*>([^<]+)</i);
+          diagnosis.adfState = adfMatch ? adfMatch[1].trim() : 'Unknown';
+        } else {
+          diagnosis.adfState = 'Unknown';
+        }
+
+        // Summary
+        diagnosis.summary = {
+          canDoDuplex: diagnosis.duplexSupport.hasDuplexTag || diagnosis.duplexSupport.hasTwoSided,
+          inputSources: diagnosis.adfInfo.inputSources,
+          connectionPort: usedPort,
+          connectionProtocol: usedProtocol,
+          model: diagnosis.model,
+          adfState: diagnosis.adfState
+        };
+
+        console.log('[Tacala] ===== DIAGNÓSTICO COMPLETO =====');
+        console.log('[Tacala] Duplex support:', JSON.stringify(diagnosis.duplexSupport, null, 2));
+        console.log('[Tacala] ADF info:', JSON.stringify(diagnosis.adfInfo, null, 2));
+        console.log('[Tacala] =====================================');
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, diagnosis }));
+      } catch (err) {
+        console.error('[Tacala] Error en diagnóstico:', err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: err.message }));
       }
     });

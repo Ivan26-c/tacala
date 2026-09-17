@@ -108,6 +108,10 @@ if (typeof pdfjsLib !== 'undefined') {
     hpStatusFeedback: document.getElementById('hpStatusFeedback'),
     hpStatusText: document.getElementById('hpStatusText'),
     btnStartHpScan: document.getElementById('btnStartHpScan'),
+    btnDiagnose: document.getElementById('btnDiagnose'),
+    diagnosisPanel: document.getElementById('diagnosisPanel'),
+    diagnosisContent: document.getElementById('diagnosisContent'),
+    btnCloseDiagnosis: document.getElementById('btnCloseDiagnosis'),
 
     // Deskew Modal
     deskewModal: document.getElementById('deskewModal'),
@@ -740,6 +744,12 @@ if (typeof pdfjsLib !== 'undefined') {
 
     // Start network scan
     DOM.btnStartHpScan.addEventListener('click', startHpNetworkScan);
+
+    // Diagnose duplex capabilities
+    DOM.btnDiagnose.addEventListener('click', runDuplexDiagnosis);
+    DOM.btnCloseDiagnosis.addEventListener('click', () => {
+      DOM.diagnosisPanel.classList.add('hidden');
+    });
   }
 
   function setDuplexState(isDuplex) {
@@ -810,6 +820,120 @@ if (typeof pdfjsLib !== 'undefined') {
     DOM.hpStatusText.textContent = text;
   }
 
+  async function runDuplexDiagnosis() {
+    const ip = DOM.hpPrinterIp.value.trim();
+    if (!ip) {
+      showToast('Primero ingresa la IP de la impresora', 'danger');
+      return;
+    }
+
+    DOM.btnDiagnose.disabled = true;
+    DOM.btnDiagnose.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Diagnosticando...';
+    DOM.diagnosisPanel.classList.add('hidden');
+
+    try {
+      const res = await fetch('/api/scanner/diagnose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip })
+      });
+      const data = await res.json();
+
+      if (!data.success) {
+        showToast(`Error: ${data.error}`, 'danger');
+        return;
+      }
+
+      const d = data.diagnosis;
+      const ds = d.duplexSupport;
+      const adf = d.adfInfo;
+      const modelName = d.model || 'HP LaserJet Pro MFP 4103fdw';
+      const adfState = d.adfState || 'Unknown';
+
+      const yesNo = (val) => val
+        ? '<span class="diag-value diag-yes">✅ SÍ</span>'
+        : '<span class="diag-value diag-no">❌ NO</span>';
+
+      let html = '';
+
+      // Model Header
+      html += `<div style="display:flex;align-items:center;gap:0.5rem;font-weight:700;color:#f8fafc;margin-bottom:0.75rem;">
+        <i class="fa-solid fa-print" style="color:#38bdf8;"></i>
+        <span>${escapeHtml(modelName)}</span>
+      </div>`;
+
+      // ADF Sensor State Alert
+      if (adfState === 'ScannerAdfLoaded') {
+        html += `<div class="diag-alert diag-alert-success">
+          <i class="fa-solid fa-circle-check"></i>
+          <div><strong>Hojas detectadas en ADF:</strong> El sensor del alimentador superior detecta papel. Listo para escanear a doble cara.</div>
+        </div>`;
+      } else if (adfState === 'ScannerAdfEmpty') {
+        html += `<div class="diag-alert diag-alert-warning">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+          <div><strong>Bandeja ADF vacía:</strong> No se detectan hojas en el alimentador superior. Para escanear a doble cara, coloca las hojas en la bandeja superior (no en el cristal) hasta que el sensor las detecte.</div>
+        </div>`;
+      } else if (adfState.includes('DoorOpen')) {
+        html += `<div class="diag-alert diag-alert-danger">
+          <i class="fa-solid fa-door-open"></i>
+          <div><strong>Tapa del ADF abierta:</strong> Cierra bien la cubierta del alimentador.</div>
+        </div>`;
+      }
+
+      // Duplex Support Alert
+      if (d.summary.canDoDuplex) {
+        html += `<div class="diag-alert diag-alert-info">
+          <i class="fa-solid fa-circle-info"></i>
+          <div><strong>Doble Cara Automática Soportada:</strong> Tu HP permite escanear ambos lados en una sola pasada. Tacala enviará los comandos <code>TwoSided</code> y <code>AdfOption: Duplex</code>.</div>
+        </div>`;
+      } else {
+        html += `<div class="diag-alert diag-alert-warning">
+          <i class="fa-solid fa-circle-question"></i>
+          <div><strong>Soporte Dúplex no confirmado:</strong> El escáner no reportó explícitamente tags de dúplex estándar. Se intentará escaneo con parámetros extendidos.</div>
+        </div>`;
+      }
+
+      // Technical Details
+      html += '<div class="diag-section-title">📋 Especificaciones eSCL Dúplex</div>';
+      html += `<div class="diag-row"><span class="diag-label">Tag "Duplex"</span>${yesNo(ds.hasDuplexTag)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Tag "DuplexMode"</span>${yesNo(ds.hasDuplexMode)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Tag "TwoSided"</span>${yesNo(ds.hasTwoSided)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Tag "AdfOption / AdfOptions"</span>${yesNo(ds.hasAdfOption || ds.hasAdfOptions)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Capacidades ADF Duplex</span>${yesNo(ds.hasAdfDuplexCaps)}</div>`;
+
+      html += '<div class="diag-section-title">🖨️ Bandejas de Entrada</div>';
+      html += `<div class="diag-row"><span class="diag-label">Alimentador ADF</span>${yesNo(adf.hasAdf)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Cristal (Platen)</span>${yesNo(adf.hasPlaten)}</div>`;
+
+      if (adf.inputSources && adf.inputSources.length > 0) {
+        html += '<div class="diag-section-title">📡 Fuentes de Entrada (InputSource)</div>';
+        adf.inputSources.forEach(s => {
+          html += `<div style="font-family:monospace;font-size:0.75rem;color:#94a3b8;">${escapeHtml(s)}</div>`;
+        });
+      }
+
+      // Raw duplex lines from XML
+      if (ds.rawDuplexLines && ds.rawDuplexLines.length > 0) {
+        html += '<div class="diag-section-title">🔍 Líneas XML Duplex en tu HP</div>';
+        html += '<pre>';
+        ds.rawDuplexLines.forEach(l => {
+          html += `L${l.line}: ${escapeHtml(l.content)}\n`;
+        });
+        html += '</pre>';
+      }
+
+      DOM.diagnosisContent.innerHTML = html;
+      DOM.diagnosisPanel.classList.remove('hidden');
+      showToast('Diagnóstico completado', 'success');
+
+    } catch (err) {
+      showToast(`Error al diagnosticar: ${err.message}`, 'danger');
+    } finally {
+      DOM.btnDiagnose.disabled = false;
+      DOM.btnDiagnose.innerHTML = '<i class="fa-solid fa-stethoscope"></i> Diagnosticar Doble Cara';
+    }
+  }
+
   async function startHpNetworkScan() {
     const ip = DOM.hpPrinterIp.value.trim();
     if (!ip) {
@@ -819,15 +943,20 @@ if (typeof pdfjsLib !== 'undefined') {
 
     localStorage.setItem('tacala_hp_printer_ip', ip);
 
-    const source = DOM.cardSourceAdf.classList.contains('active') ? 'Feeder' : 'Platen';
-    const duplex = DOM.hpDuplexCheck.checked && source === 'Feeder';
+    const isDuplexRequested = DOM.hpDuplexCheck.checked;
+    // Si se pide doble cara, obligatoriamente se usa Feeder/ADF
+    let source = DOM.cardSourceAdf.classList.contains('active') ? 'Feeder' : 'Platen';
+    if (isDuplexRequested) {
+      source = 'Feeder';
+    }
+    const duplex = isDuplexRequested;
     const colorMode = 'Color';
     const resolution = 300;
 
     // Show laser progress box
     DOM.hpScanProgressBox.classList.remove('hidden');
     DOM.hpScanProgressTitle.textContent = `Escaneando desde ${source === 'Feeder' ? 'Alimentador ADF' : 'Cristal'}...`;
-    DOM.hpScanProgressSubtitle.textContent = `La HP 4103fdw está procesando las hojas ${duplex ? '(Doble cara - ambos lados)' : '(1 cara)'}.`;
+    DOM.hpScanProgressSubtitle.textContent = `La HP está procesando las hojas ${duplex ? '(Doble cara - ambos lados)' : '(1 cara)'}. Espera unos segundos...`;
     DOM.btnStartHpScan.disabled = true;
 
     try {

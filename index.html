@@ -264,6 +264,23 @@
               <span class="status-dot dot-idle"></span>
               <span id="hpStatusText">Ingresa la IP de la impresora.</span>
             </div>
+            <button class="btn btn-secondary btn-sm" id="btnDiagnose" style="margin-top: 0.5rem; width: 100%;">
+              <i class="fa-solid fa-stethoscope"></i> Diagnosticar Doble Cara
+            </button>
+          </div>
+        </div>
+
+        <!-- Diagnosis Results Panel -->
+        <div class="diagnosis-results-panel hidden" id="diagnosisPanel">
+          <div class="diagnosis-header">
+            <i class="fa-solid fa-clipboard-check"></i>
+            <strong>Resultado del Diagnóstico</strong>
+            <button class="close-clean-btn" id="btnCloseDiagnosis" style="width:24px;height:24px;font-size:0.7rem;">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+          <div class="diagnosis-content" id="diagnosisContent">
+            <!-- Filled dynamically -->
           </div>
         </div>
 

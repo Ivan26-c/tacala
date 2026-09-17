@@ -1162,6 +1162,124 @@ body {
   flex: 1;
 }
 
+/* Diagnosis Panel */
+.diagnosis-results-panel {
+  margin-top: 0.5rem;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  animation: fadeIn 0.2s ease;
+}
+
+.diagnosis-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1rem;
+  background: rgba(6, 182, 212, 0.1);
+  border-bottom: 1px solid rgba(6, 182, 212, 0.2);
+  color: #06b6d4;
+  font-size: 0.85rem;
+}
+
+.diagnosis-header strong {
+  flex: 1;
+}
+
+.diagnosis-content {
+  padding: 0.85rem 1rem;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  max-height: 250px;
+  overflow-y: auto;
+  line-height: 1.6;
+}
+
+.diagnosis-content .diag-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.diagnosis-content .diag-label {
+  color: var(--text-muted);
+}
+
+.diagnosis-content .diag-value {
+  font-family: monospace;
+  font-weight: 600;
+}
+
+.diagnosis-content .diag-yes {
+  color: #10b981;
+}
+
+.diagnosis-content .diag-no {
+  color: #ef4444;
+}
+
+.diagnosis-content .diag-section-title {
+  font-weight: 700;
+  color: #38bdf8;
+  margin-top: 0.5rem;
+  margin-bottom: 0.2rem;
+  font-size: 0.82rem;
+}
+
+.diagnosis-content pre {
+  background: rgba(0, 0, 0, 0.4);
+  padding: 0.5rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  margin-top: 0.3rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diag-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.diag-alert i {
+  margin-top: 0.15rem;
+  font-size: 0.95rem;
+}
+
+.diag-alert-success {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #34d399;
+}
+
+.diag-alert-warning {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+}
+
+.diag-alert-info {
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #38bdf8;
+}
+
+.diag-alert-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #f87171;
+}
+
 /* ==========================================================================
    Deskew (Enderezar) Modal Layout
    ========================================================================== */
