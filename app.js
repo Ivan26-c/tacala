@@ -1080,6 +1080,45 @@ if (typeof pdfjsLib !== 'undefined') {
       renderDeskewCanvas();
     });
 
+    // Direct mouse drag on canvas to move content
+    let isDraggingContent = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let startOffsetX = 0;
+    let startOffsetY = 0;
+
+    DOM.deskewCanvas.style.cursor = 'grab';
+
+    DOM.deskewCanvas.addEventListener('mousedown', (e) => {
+      isDraggingContent = true;
+      dragStartX = e.clientX;
+      dragStartY = e.clientY;
+      startOffsetX = deskew.offsetX;
+      startOffsetY = deskew.offsetY;
+      DOM.deskewCanvas.style.cursor = 'grabbing';
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDraggingContent) return;
+      const dx = e.clientX - dragStartX;
+      const dy = e.clientY - dragStartY;
+      // Adjust movement to match scale
+      deskew.offsetX = Math.max(-300, Math.min(300, Math.round(startOffsetX + dx)));
+      deskew.offsetY = Math.max(-300, Math.min(300, Math.round(startOffsetY + dy)));
+      DOM.offsetXSlider.value = deskew.offsetX;
+      DOM.offsetYSlider.value = deskew.offsetY;
+      DOM.offsetXVal.textContent = `${deskew.offsetX > 0 ? '+' : ''}${deskew.offsetX}px`;
+      DOM.offsetYVal.textContent = `${deskew.offsetY > 0 ? '+' : ''}${deskew.offsetY}px`;
+      renderDeskewCanvas();
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (isDraggingContent) {
+        isDraggingContent = false;
+        DOM.deskewCanvas.style.cursor = 'grab';
+      }
+    });
+
     DOM.btnApplyDeskew.addEventListener('click', applyDeskewChanges);
   }
 
