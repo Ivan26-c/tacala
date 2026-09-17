@@ -159,11 +159,17 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   // A4 = 8.27 x 11.69 inches
   const widthPx = Math.round(8.27 * resolution);
   const heightPx = Math.round(11.69 * resolution);
+  // Normalizar modo de color eSCL
+  let normalizedColor = 'RGB24';
+  if (colorMode === 'Grayscale') normalizedColor = 'Grayscale8';
+  else if (colorMode === 'Mono') normalizedColor = 'BlackAndWhite1';
 
-  // HP eSCL native duplex tag
-  const duplexStr = isDuplex ? 'true' : 'false';
-
-  const xmlPayload = `<?xml version="1.0" encoding="UTF-8"?>
+  // Variantes de ScanSettings para máxima compatibilidad con HP eSCL
+  const variants = [];
+  if (isDuplex) {
+    variants.push({
+      name: 'HP Duplex Completo (AdfOptions + DuplexMode + Duplex)',
+      xml: `<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
   <pwg:Version>2.0</pwg:Version>
   <pwg:ScanRegions>
@@ -176,43 +182,155 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   </pwg:ScanRegions>
   <pwg:InputSource>${actualSource}</pwg:InputSource>
   <scan:InputSource>${actualSource}</scan:InputSource>
-  <scan:ColorMode>${colorMode}</scan:ColorMode>
+  <scan:ColorMode>${normalizedColor}</scan:ColorMode>
   <scan:XResolution>${resolution}</scan:XResolution>
   <scan:YResolution>${resolution}</scan:YResolution>
   <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
-  <scan:Duplex>${duplexStr}</scan:Duplex>
-</scan:ScanSettings>`;
+  <scan:AdfOptions>
+    <scan:AdfOption>Duplex</scan:AdfOption>
+  </scan:AdfOptions>
+  <scan:DuplexMode>TwoSided</scan:DuplexMode>
+  <scan:Duplex>true</scan:Duplex>
+</scan:ScanSettings>`
+    });
 
-  console.log(`[Tacala] ===== XML PAYLOAD ENVIADO =====`);
-  console.log(xmlPayload);
-  console.log(`[Tacala] ================================`);
+    variants.push({
+      name: 'HP Duplex (AdfOptions + Duplex booleano)',
+      xml: `<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>${heightPx}</pwg:Height>
+      <pwg:Width>${widthPx}</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>${actualSource}</pwg:InputSource>
+  <scan:InputSource>${actualSource}</scan:InputSource>
+  <scan:ColorMode>${normalizedColor}</scan:ColorMode>
+  <scan:XResolution>${resolution}</scan:XResolution>
+  <scan:YResolution>${resolution}</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:AdfOptions>
+    <scan:AdfOption>Duplex</scan:AdfOption>
+  </scan:AdfOptions>
+  <scan:Duplex>true</scan:Duplex>
+</scan:ScanSettings>`
+    });
 
-  // 1. Create Scan Job
-  const createJobOptions = {
-    protocol: isHttps ? 'https:' : 'http:',
-    hostname: cleanIp,
-    port: port,
-    path: '/eSCL/ScanJobs',
-    method: 'POST',
-    headers: {
-      'Content-Type': 'text/xml',
-      'Content-Length': Buffer.byteLength(xmlPayload)
-    },
-    rejectUnauthorized: false
-  };
+    variants.push({
+      name: 'HP Duplex (AdfOptions)',
+      xml: `<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>${heightPx}</pwg:Height>
+      <pwg:Width>${widthPx}</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>${actualSource}</pwg:InputSource>
+  <scan:InputSource>${actualSource}</scan:InputSource>
+  <scan:ColorMode>${normalizedColor}</scan:ColorMode>
+  <scan:XResolution>${resolution}</scan:XResolution>
+  <scan:YResolution>${resolution}</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:AdfOptions>
+    <scan:AdfOption>Duplex</scan:AdfOption>
+  </scan:AdfOptions>
+</scan:ScanSettings>`
+    });
 
-  const jobRes = await httpRequest(createJobOptions, xmlPayload);
-  console.log(`[Tacala] Respuesta crear job: HTTP ${jobRes.statusCode}`);
-  console.log(`[Tacala] Headers respuesta:`, JSON.stringify(jobRes.headers, null, 2));
-  if (jobRes.statusCode !== 201) {
-    const responseBody = jobRes.data.toString('utf-8');
-    console.error(`[Tacala] Error body:`, responseBody);
-    throw new Error(`La impresora respondió con código ${jobRes.statusCode}: ${responseBody}`);
+    variants.push({
+      name: 'eSCL Estándar (scan:Duplex)',
+      xml: `<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>${heightPx}</pwg:Height>
+      <pwg:Width>${widthPx}</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>${actualSource}</pwg:InputSource>
+  <scan:InputSource>${actualSource}</scan:InputSource>
+  <scan:ColorMode>${normalizedColor}</scan:ColorMode>
+  <scan:XResolution>${resolution}</scan:XResolution>
+  <scan:YResolution>${resolution}</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:Duplex>true</scan:Duplex>
+</scan:ScanSettings>`
+    });
+  } else {
+    variants.push({
+      name: 'Simplex (1 cara)',
+      xml: `<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>${heightPx}</pwg:Height>
+      <pwg:Width>${widthPx}</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>${actualSource}</pwg:InputSource>
+  <scan:InputSource>${actualSource}</scan:InputSource>
+  <scan:ColorMode>${normalizedColor}</scan:ColorMode>
+  <scan:XResolution>${resolution}</scan:XResolution>
+  <scan:YResolution>${resolution}</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:Duplex>false</scan:Duplex>
+</scan:ScanSettings>`
+    });
   }
 
-  const locationHeader = jobRes.headers['location'] || jobRes.headers['Location'];
+  // 1. Crear trabajo con soporte multi-variante
+  let locationHeader = null;
+  let lastJobError = null;
+
+  for (const v of variants) {
+    console.log(`[Tacala] Probando configuración eSCL: ${v.name}...`);
+    try {
+      const createJobOptions = {
+        protocol: isHttps ? 'https:' : 'http:',
+        hostname: cleanIp,
+        port: port,
+        path: '/eSCL/ScanJobs',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/xml',
+          'Content-Length': Buffer.byteLength(v.xml)
+        },
+        rejectUnauthorized: false
+      };
+
+      const jobRes = await httpRequest(createJobOptions, v.xml);
+      console.log(`[Tacala] Respuesta ${v.name}: HTTP ${jobRes.statusCode}`);
+
+      if (jobRes.statusCode === 201) {
+        locationHeader = jobRes.headers['location'] || jobRes.headers['Location'];
+        console.log(`[Tacala] ¡Impresora HP aceptó configuración '${v.name}'! Location: ${locationHeader}`);
+        break;
+      } else {
+        const responseBody = jobRes.data.toString('utf-8');
+        console.warn(`  [Tacala] '${v.name}' rechazada con HTTP ${jobRes.statusCode}: ${responseBody}`);
+        lastJobError = new Error(`HTTP ${jobRes.statusCode}: ${responseBody}`);
+      }
+    } catch (err) {
+      lastJobError = err;
+    }
+  }
+
   if (!locationHeader) {
-    throw new Error('No se recibió la ubicación del trabajo de escaneo (Location Header).');
+    throw lastJobError || new Error('No se recibió la ubicación del trabajo de escaneo (Location Header).');
   }
 
   // Location can be relative "/eSCL/ScanJobs/..." or absolute URL
@@ -223,15 +341,13 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
 
   // 2. Poll & Download Scanned Pages with Duplex Retry Loop
   const scannedPages = [];
-  // Duplex doubles effective pages; increase max for ADF
   const maxPages = (actualSource === 'Adf' || source === 'Feeder') ? (isDuplex ? 120 : 60) : 1;
 
-  let consecutive404 = 0;
   for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
     let gotPage = false;
     let retries = 0;
-    // Give more time for duplex: printer needs to flip pages or process 2nd CIS sensor
-    const maxRetriesForPage = pageNum === 1 ? 30 : (isDuplex ? 30 : 15);
+    const maxRetriesForPage = pageNum === 1 ? 30 : (isDuplex && pageNum % 2 === 0 ? 35 : 15);
+    let consecutive404 = 0;
 
     while (retries < maxRetriesForPage) {
       await new Promise((r) => setTimeout(r, 1200));
@@ -248,46 +364,35 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
       try {
         const docRes = await httpRequest(docOptions);
 
-        if (docRes.statusCode === 200 && docRes.data.length > 0) {
-          const contentType = docRes.headers['content-type'] || 'image/jpeg';
-          const base64Data = docRes.data.toString('base64');
-          const dataUrl = `data:${contentType};base64,${base64Data}`;
+        if (docRes.statusCode === 200) {
+          const imgBytes = docRes.data;
+          const b64 = imgBytes.toString('base64');
+          const dataUrl = `data:image/jpeg;base64,${b64}`;
 
-          // Also save a copy to the escaneos directory
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
           const filename = `hp4103_${timestamp}_cara${pageNum}.jpg`;
-          fs.writeFileSync(path.join(SCANS_DIR, filename), docRes.data);
+          const savePath = path.join(SCANS_DIR, filename);
+          fs.writeFileSync(savePath, imgBytes);
 
-          scannedPages.push({
-            dataUrl: dataUrl,
-            type: 'image',
-            filename: filename
-          });
-
-          console.log(`[Tacala] Cara ${pageNum} escaneada y recibida (${Math.round(docRes.data.length / 1024)} KB)`);
+          scannedPages.push({ dataUrl, type: 'image', filename });
+          console.log(`[Tacala] -> Cara ${pageNum} escaneada y recibida (${Math.round(imgBytes.length / 1024)} KB)`);
           gotPage = true;
           consecutive404 = 0;
           break;
         } else if (docRes.statusCode === 503) {
-          // 503 = Printer is flipping the page or processing next side (very common in duplex)
-          console.log(`[Tacala] Procesando cara ${pageNum} (impresora ocupada - 503)... esperando (${retries + 1})`);
-          if (isDuplex) {
-            await new Promise((r) => setTimeout(r, 800));
-          }
+          console.log(`[Tacala] Procesando cara ${pageNum} (impresora ocupada - 503)... esperando (${retries + 1}/${maxRetriesForPage})`);
           retries++;
           continue;
         } else if (docRes.statusCode === 404) {
           consecutive404++;
-          console.log(`[Tacala] Cara ${pageNum} esperando... (404 intento ${consecutive404})`);
+          console.log(`[Tacala] Cara ${pageNum} esperando... (404 intento ${consecutive404}/${maxRetriesForPage})`);
 
           if (scannedPages.length > 0) {
-            // If waiting for the back side of an already scanned sheet, wait longer
             const isWaitingBackSide = isDuplex && (scannedPages.length % 2 !== 0);
-            const threshold404 = isWaitingBackSide ? 10 : 3;
+            const threshold404 = isWaitingBackSide ? 15 : 3;
 
             if (consecutive404 >= threshold404) {
-              // Verify JobState via jobPath
-              let stillProcessing = false;
+              let jobDone = false;
               try {
                 const jobStateRes = await httpRequest({
                   protocol: isHttps ? 'https:' : 'http:',
@@ -299,15 +404,23 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
                 });
                 if (jobStateRes.statusCode === 200) {
                   const stateXml = jobStateRes.data.toString('utf-8');
-                  if (stateXml.includes('Processing')) {
-                    stillProcessing = true;
-                    console.log(`[Tacala] El trabajo sigue en 'Processing'. Continuando espera...`);
+                  const match = stateXml.match(/<[^>]*JobState[^>]*>\s*([^<]+)\s*</i);
+                  const reportedState = match ? match[1].trim() : 'Unknown';
+                  console.log(`[Tacala] Estado reportado del trabajo: '${reportedState}'`);
+
+                  if (/^(Completed|Canceled|Aborted)$/i.test(reportedState)) {
+                    jobDone = true;
+                  } else if (/Processing|Pending/i.test(reportedState)) {
+                    jobDone = false;
+                    console.log(`[Tacala] La impresora sigue procesando ('${reportedState}')... continuando espera`);
                   }
                 }
-              } catch (e) {}
+              } catch (e) {
+                if (!isWaitingBackSide) jobDone = true;
+              }
 
-              if (!stillProcessing) {
-                console.log(`[Tacala] Fin del trabajo de escaneo detectado.`);
+              if (jobDone) {
+                console.log(`[Tacala] Trabajo de escaneo finalizado en la impresora.`);
                 break;
               }
             }

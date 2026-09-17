@@ -215,6 +215,7 @@ while ($listener.IsListening) {
                     connectionPort = 80
                     connectionProtocol = "http"
                 }
+                rawXml = $capsXml
             }
 
             Write-Host "[Tacala] Diagnostico completado para HP $($ip) - Modelo '$model', Soporta Duplex: $canDoDuplex, ADF Sensor: $adfState" -ForegroundColor Cyan
@@ -248,15 +249,18 @@ while ($listener.IsListening) {
 
         # Para HP, el alimentador superior en eSCL es "Feeder"
         $actualSource = if ($reqSource -eq "Platen" -and -not $isDuplex) { "Platen" } else { "Feeder" }
-        $color = if ($params.colorMode) { $params.colorMode } else { "RGB24" }
+        $color = if ($params.colorMode -eq "Grayscale") { "Grayscale8" } elseif ($params.colorMode -eq "Mono") { "BlackAndWhite1" } else { "RGB24" }
         $resDpi = if ($params.resolution) { [int]$params.resolution } else { 300 }
         $duplexStr = if ($isDuplex) { "true" } else { "false" }
 
         $wPx = [math]::Round(8.27 * $resDpi)
         $hPx = [math]::Round(11.69 * $resDpi)
 
-        # XML estandar eSCL para HP (usa directiva nativa scan:Duplex)
-        $xmlPayload = @"
+        # Variantes de ScanSettings para máxima compatibilidad con HP eSCL
+        $variants = @()
+        if ($isDuplex) {
+            # Variante 1: Oficial HP ADF Duplex (AdfOptions + DuplexMode + Duplex)
+            $v1 = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
   <pwg:Version>2.0</pwg:Version>
@@ -274,12 +278,117 @@ while ($listener.IsListening) {
   <scan:XResolution>$resDpi</scan:XResolution>
   <scan:YResolution>$resDpi</scan:YResolution>
   <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
-  <scan:Duplex>$duplexStr</scan:Duplex>
+  <scan:AdfOptions>
+    <scan:AdfOption>Duplex</scan:AdfOption>
+  </scan:AdfOptions>
+  <scan:DuplexMode>TwoSided</scan:DuplexMode>
+  <scan:Duplex>true</scan:Duplex>
 </scan:ScanSettings>
 "@
+            # Variante 2: HP AdfOptions (Duplex) + Duplex booleano (sin DuplexMode)
+            $v2 = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>$hPx</pwg:Height>
+      <pwg:Width>$wPx</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>$actualSource</pwg:InputSource>
+  <scan:InputSource>$actualSource</scan:InputSource>
+  <scan:ColorMode>$color</scan:ColorMode>
+  <scan:XResolution>$resDpi</scan:XResolution>
+  <scan:YResolution>$resDpi</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:AdfOptions>
+    <scan:AdfOption>Duplex</scan:AdfOption>
+  </scan:AdfOptions>
+  <scan:Duplex>true</scan:Duplex>
+</scan:ScanSettings>
+"@
+            # Variante 3: Solo AdfOptions (Duplex)
+            $v3 = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>$hPx</pwg:Height>
+      <pwg:Width>$wPx</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>$actualSource</pwg:InputSource>
+  <scan:InputSource>$actualSource</scan:InputSource>
+  <scan:ColorMode>$color</scan:ColorMode>
+  <scan:XResolution>$resDpi</scan:XResolution>
+  <scan:YResolution>$resDpi</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:AdfOptions>
+    <scan:AdfOption>Duplex</scan:AdfOption>
+  </scan:AdfOptions>
+</scan:ScanSettings>
+"@
+            # Variante 4: eSCL scan:Duplex estándar
+            $v4 = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>$hPx</pwg:Height>
+      <pwg:Width>$wPx</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>$actualSource</pwg:InputSource>
+  <scan:InputSource>$actualSource</scan:InputSource>
+  <scan:ColorMode>$color</scan:ColorMode>
+  <scan:XResolution>$resDpi</scan:XResolution>
+  <scan:YResolution>$resDpi</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:Duplex>true</scan:Duplex>
+</scan:ScanSettings>
+"@
+            $variants = @(
+                @{ name = "HP Duplex Completo (AdfOptions + DuplexMode + Duplex)"; xml = $v1 },
+                @{ name = "HP Duplex (AdfOptions + Duplex booleano)"; xml = $v2 },
+                @{ name = "HP Duplex (AdfOptions)"; xml = $v3 },
+                @{ name = "eSCL Estándar (scan:Duplex)"; xml = $v4 }
+            )
+        } else {
+            $simplexXml = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>$hPx</pwg:Height>
+      <pwg:Width>$wPx</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>$actualSource</pwg:InputSource>
+  <scan:InputSource>$actualSource</scan:InputSource>
+  <scan:ColorMode>$color</scan:ColorMode>
+  <scan:XResolution>$resDpi</scan:XResolution>
+  <scan:YResolution>$resDpi</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:Duplex>false</scan:Duplex>
+</scan:ScanSettings>
+"@
+            $variants = @( @{ name = "Simplex (1 cara)"; xml = $simplexXml } )
+        }
 
         try {
-            # Verificacion previa: Si se escanea con Feeder (ADF), comprobar si hay hojas
+            # Verificación previa: Si se escanea con Feeder (ADF), comprobar si hay hojas
             if ($actualSource -eq "Feeder") {
                 try {
                     $chkReq = [System.Net.HttpWebRequest]::Create("http://$ip/eSCL/ScannerStatus")
@@ -297,26 +406,48 @@ while ($listener.IsListening) {
             }
 
             Write-Host "[Tacala] Iniciando escaneo en HP $($ip) (Origen: $actualSource, Doble cara: $isDuplex)" -ForegroundColor Cyan
-            Write-Host "[Tacala] Enviando ScanSettings eSCL..." -ForegroundColor DarkGray
             
-            $jobReq = [System.Net.HttpWebRequest]::Create("http://$ip/eSCL/ScanJobs")
-            $jobReq.Method = "POST"
-            $jobReq.ContentType = "text/xml"
-            $jobReq.Timeout = 25000
-            $postBytes = [System.Text.Encoding]::UTF8.GetBytes($xmlPayload)
-            $jobReq.ContentLength = $postBytes.Length
-            $postStream = $jobReq.GetRequestStream()
-            $postStream.Write($postBytes, 0, $postBytes.Length)
-            $postStream.Close()
+            $location = $null
+            $lastError = $null
 
-            $jobRes = $jobReq.GetResponse()
-            $location = $jobRes.Headers["Location"]
-            $jobRes.Close()
+            # Intentar variantes automáticas para asegurar que la impresora acepte la directiva duplex exacta
+            foreach ($v in $variants) {
+                Write-Host "[Tacala] Enviando configuración eSCL: $($v.name)..." -ForegroundColor DarkGray
+                try {
+                    $jobReq = [System.Net.HttpWebRequest]::Create("http://$ip/eSCL/ScanJobs")
+                    $jobReq.Method = "POST"
+                    $jobReq.ContentType = "text/xml"
+                    $jobReq.Timeout = 20000
+                    $postBytes = [System.Text.Encoding]::UTF8.GetBytes($v.xml)
+                    $jobReq.ContentLength = $postBytes.Length
+                    $postStream = $jobReq.GetRequestStream()
+                    $postStream.Write($postBytes, 0, $postBytes.Length)
+                    $postStream.Close()
 
-            if (-not $location) { throw "No se recibio identificador del trabajo de escaneo de la impresora." }
+                    $jobRes = $jobReq.GetResponse()
+                    $statusCode = [int]$jobRes.StatusCode
+                    $loc = $jobRes.Headers["Location"]
+                    $jobRes.Close()
 
-            # Bucle inteligente para descargar TODAS las caras escaneadas
-            # En duplex, la impresora procesa ambas caras y responde 503 o 404 mientras procesa la cara 2.
+                    if ($loc) {
+                        $location = $loc
+                        Write-Host "[Tacala] ¡Impresora HP aceptó configuración '$($v.name)' (HTTP $statusCode)!" -ForegroundColor Green
+                        break
+                    }
+                } catch [System.Net.WebException] {
+                    $lastError = $_.Exception
+                    $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+                    Write-Host "  [Tacala] '$($v.name)' respondió HTTP $code. Probando siguiente variante..." -ForegroundColor Yellow
+                }
+            }
+
+            if (-not $location) {
+                $errMsg = if ($lastError) { $lastError.Message } else { "No se recibió respuesta de trabajo de la impresora." }
+                throw "La impresora no aceptó la orden de escaneo: $errMsg"
+            }
+
+            # Bucle para descargar TODAS las caras escaneadas
+            # En duplex, la impresora procesa ambas caras y responde 503 o 404 temporal mientras procesa la cara 2.
             $pagesList = @()
             $maxPages = if ($actualSource -eq "Platen") { 1 } else { if ($isDuplex) { 100 } else { 50 } }
             $docBaseUrl = if ($location.StartsWith("http")) { "$location/NextDocument" } else { "http://$ip$location/NextDocument" }
@@ -325,8 +456,8 @@ while ($listener.IsListening) {
             for ($pageNum = 1; $pageNum -le $maxPages; $pageNum++) {
                 $gotPage = $false
                 $retries = 0
-                # En duplex, la cara 2 (reverso) tarda en voltearse o procesarse: permitir hasta 30 reintentos
-                $maxRetriesForPage = if ($pageNum -eq 1) { 30 } elseif ($isDuplex -and ($pageNum % 2 -eq 0)) { 30 } else { 15 }
+                # En duplex, la cara 2 (reverso) tarda en voltearse o procesarse: permitir hasta 35 reintentos (~45s)
+                $maxRetriesForPage = if ($pageNum -eq 1) { 30 } elseif ($isDuplex -and ($pageNum % 2 -eq 0)) { 35 } else { 15 }
                 $consecutive404 = 0
 
                 while ($retries -lt $maxRetriesForPage) {
@@ -351,7 +482,7 @@ while ($listener.IsListening) {
                                 $timestamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
                                 $filename = "hp4103_${timestamp}_cara$pageNum.jpg"
                                 
-                                # Guardar tambien en disco en la carpeta escaneos
+                                # Guardar también en disco en la carpeta escaneos
                                 $savePath = Join-Path $scansDir $filename
                                 [System.IO.File]::WriteAllBytes($savePath, $imgBytes)
 
@@ -373,16 +504,17 @@ while ($listener.IsListening) {
                                 continue
                             } elseif ($code -eq 404) {
                                 $consecutive404++
-                                Write-Host "  [HP 4103] Cara $pageNum esperando... (404 intento $consecutive404)" -ForegroundColor DarkGray
+                                Write-Host "  [HP 4103] Cara $pageNum esperando... (404 intento $consecutive404/$maxRetriesForPage)" -ForegroundColor DarkGray
 
                                 if ($pagesList.Count -gt 0) {
                                     # Si es duplex y acabamos de recibir una cara impar (1, 3, 5...), estamos esperando el REVERSO de la misma hoja:
                                     $waitingForBackSide = ($isDuplex -and ($pagesList.Count % 2 -ne 0))
-                                    $threshold404 = if ($waitingForBackSide) { 12 } else { 3 }
+                                    # Si estamos esperando el reverso, damos al menos 15 intentos (20s) antes de verificar si el trabajo concluyó
+                                    $threshold404 = if ($waitingForBackSide) { 15 } else { 3 }
 
                                     if ($consecutive404 -ge $threshold404) {
                                         # Consultar el estado del trabajo para no cortar antes de tiempo
-                                        $jobDone = $true
+                                        $jobDone = $false
                                         try {
                                             $jReq = [System.Net.HttpWebRequest]::Create($jobStatusUrl)
                                             $jReq.Timeout = 3000
@@ -390,11 +522,22 @@ while ($listener.IsListening) {
                                             $jSr = New-Object System.IO.StreamReader($jRes.GetResponseStream())
                                             $jXml = $jSr.ReadToEnd()
                                             $jRes.Close()
-                                            if ($jXml -match "<[^>]*JobState[^>]*>Processing<") {
-                                                $jobDone = $false
-                                                Write-Host "  [HP 4103] La impresora sigue procesando la hoja ('Processing')... continuando espera" -ForegroundColor Cyan
+
+                                            $jobState = "Unknown"
+                                            if ($jXml -match "<[^>]*JobState[^>]*>\s*([^<]+)\s*<") {
+                                                $jobState = $matches[1].Trim()
                                             }
-                                        } catch {}
+                                            Write-Host "  [HP 4103] Estado reportado del trabajo: '$jobState'" -ForegroundColor DarkCyan
+
+                                            if ($jobState -match "^(?i)(Completed|Canceled|Aborted)$") {
+                                                $jobDone = $true
+                                            } elseif ($jobState -match "(?i)(Processing|Pending)") {
+                                                $jobDone = $false
+                                                Write-Host "  [HP 4103] La impresora sigue procesando la hoja ('$jobState')... continuando espera" -ForegroundColor Cyan
+                                            }
+                                        } catch {
+                                            if (-not $waitingForBackSide) { $jobDone = $true }
+                                        }
 
                                         if ($jobDone) {
                                             Write-Host "  [HP 4103] Trabajo de escaneo finalizado en la impresora." -ForegroundColor DarkCyan

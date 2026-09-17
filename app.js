@@ -895,10 +895,10 @@ if (typeof pdfjsLib !== 'undefined') {
 
       // Technical Details
       html += '<div class="diag-section-title">📋 Especificaciones eSCL Dúplex</div>';
-      html += `<div class="diag-row"><span class="diag-label">Directiva "Duplex" (Oficial HP)</span>${yesNo(ds.hasDuplexTag)}</div>`;
-      html += `<div class="diag-row"><span class="diag-label">Tag "DuplexMode" (Opcional en HP)</span><span class="diag-value" style="color:#94a3b8;">No requerido</span></div>`;
-      html += `<div class="diag-row"><span class="diag-label">Tag "TwoSided" (Opcional en HP)</span><span class="diag-value" style="color:#94a3b8;">No requerido</span></div>`;
-      html += `<div class="diag-row"><span class="diag-label">Capacidades ADF Duplex</span>${yesNo(ds.hasAdfDuplexCaps)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Opción ADF Duplex (Oficial HP)</span>${yesNo(ds.hasAdfOption || ds.hasAdfOptions || ds.hasDuplexTag)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Directiva "scan:Duplex"</span>${yesNo(ds.hasDuplexTag)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Capacidades ADF Duplex</span>${yesNo(ds.hasAdfDuplexCaps || ds.hasAdfOption)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Modo Multi-Variante Auto-Recuperación</span><span class="diag-badge-yes"><i class="fa-solid fa-check"></i> Activo (4 variantes)</span></div>`;
 
       html += '<div class="diag-section-title">🖨️ Bandejas de Entrada</div>';
       html += `<div class="diag-row"><span class="diag-label">Alimentador ADF</span>${yesNo(adf.hasAdf)}</div>`;
@@ -919,6 +919,15 @@ if (typeof pdfjsLib !== 'undefined') {
           html += `L${l.line}: ${escapeHtml(l.content)}\n`;
         });
         html += '</pre>';
+      }
+
+      const fullXml = d.rawXml || d.rawCapabilitiesXml;
+      if (fullXml) {
+        html += '<div style="margin-top:10px;">';
+        html += '<details><summary style="cursor:pointer;color:#38bdf8;font-size:0.8rem;"><i class="fa-solid fa-code"></i> Ver XML Completo de la Impresora (ScannerCapabilities)</summary>';
+        html += `<textarea readonly style="width:100%;height:180px;background:#0f172a;color:#94a3b8;font-family:monospace;font-size:0.7rem;padding:8px;border-radius:6px;border:1px solid #334155;margin-top:6px;">${escapeHtml(fullXml)}</textarea>`;
+        html += '</details>';
+        html += '</div>';
       }
 
       DOM.diagnosisContent.innerHTML = html;
@@ -949,7 +958,7 @@ if (typeof pdfjsLib !== 'undefined') {
       source = 'Feeder';
     }
     const duplex = isDuplexRequested;
-    const colorMode = 'Color';
+    const colorMode = 'RGB24';
     const resolution = 300;
 
     // Show laser progress box
