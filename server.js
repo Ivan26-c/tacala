@@ -130,11 +130,11 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   const cleanIp = ip.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   const isHttps = protocol === 'https' || port === 443;
   const isDuplex = Boolean(duplex);
-  // Para HP eSCL, el alimentador dúplex se identifica como 'Adf'
-  const actualSource = (source === 'Platen' && !isDuplex) ? 'Platen' : 'Adf';
+  // Para HP eSCL y estándar PWG, el alimentador se identifica como 'Feeder'
+  const actualSource = (source === 'Platen' && !isDuplex) ? 'Platen' : 'Feeder';
 
   // Check if ADF is empty before attempting scan
-  if (actualSource === 'Adf' || actualSource === 'Feeder') {
+  if (actualSource === 'Feeder') {
     try {
       const statusRes = await httpRequest({
         protocol: isHttps ? 'https:' : 'http:',
@@ -168,7 +168,7 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   const variants = [];
   if (isDuplex) {
     variants.push({
-      name: 'HP Adf Duplex PDF (Adf + Duplex + PDF)',
+      name: 'HP Feeder Duplex PDF (Feeder + Duplex + PDF)',
       xml: `<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
   <pwg:Version>2.0</pwg:Version>
@@ -180,8 +180,8 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <pwg:InputSource>Adf</pwg:InputSource>
-  <scan:InputSource>Adf</scan:InputSource>
+  <pwg:InputSource>Feeder</pwg:InputSource>
+  <scan:InputSource>Feeder</scan:InputSource>
   <scan:ColorMode>${normalizedColor}</scan:ColorMode>
   <scan:XResolution>${resolution}</scan:XResolution>
   <scan:YResolution>${resolution}</scan:YResolution>
@@ -194,33 +194,7 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
     });
 
     variants.push({
-      name: 'HP Adf Duplex (Adf + AdfOptions + Duplex)',
-      xml: `<?xml version="1.0" encoding="UTF-8"?>
-<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
-  <pwg:Version>2.0</pwg:Version>
-  <pwg:ScanRegions>
-    <pwg:ScanRegion>
-      <pwg:Height>${heightPx}</pwg:Height>
-      <pwg:Width>${widthPx}</pwg:Width>
-      <pwg:XOffset>0</pwg:XOffset>
-      <pwg:YOffset>0</pwg:YOffset>
-    </pwg:ScanRegion>
-  </pwg:ScanRegions>
-  <pwg:InputSource>Adf</pwg:InputSource>
-  <scan:InputSource>Adf</scan:InputSource>
-  <scan:ColorMode>${normalizedColor}</scan:ColorMode>
-  <scan:XResolution>${resolution}</scan:XResolution>
-  <scan:YResolution>${resolution}</scan:YResolution>
-  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
-  <scan:AdfOptions>
-    <scan:AdfOption>Duplex</scan:AdfOption>
-  </scan:AdfOptions>
-  <scan:Duplex>true</scan:Duplex>
-</scan:ScanSettings>`
-    });
-
-    variants.push({
-      name: 'HP Feeder Duplex (Feeder + AdfOptions + Duplex)',
+      name: 'HP Feeder Duplex JPEG (Feeder + AdfOptions + Duplex)',
       xml: `<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
   <pwg:Version>2.0</pwg:Version>
@@ -246,7 +220,7 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
     });
 
     variants.push({
-      name: 'HP Adf Duplex (Adf + Duplex)',
+      name: 'HP Feeder DuplexMode (TwoSidedLongEdge + PDF)',
       xml: `<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
   <pwg:Version>2.0</pwg:Version>
@@ -258,12 +232,13 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <pwg:InputSource>Adf</pwg:InputSource>
-  <scan:InputSource>Adf</scan:InputSource>
+  <pwg:InputSource>Feeder</pwg:InputSource>
+  <scan:InputSource>Feeder</scan:InputSource>
   <scan:ColorMode>${normalizedColor}</scan:ColorMode>
   <scan:XResolution>${resolution}</scan:XResolution>
   <scan:YResolution>${resolution}</scan:YResolution>
-  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <pwg:DocumentFormat>application/pdf</pwg:DocumentFormat>
+  <scan:DuplexMode>TwoSidedLongEdge</scan:DuplexMode>
   <scan:Duplex>true</scan:Duplex>
 </scan:ScanSettings>`
     });
@@ -528,6 +503,116 @@ function getWiaDevices() {
   });
 }
 
+function inspectWia({ deviceId = '' } = {}) {
+  return new Promise((resolve, reject) => {
+    if (process.platform !== 'win32') {
+      return reject(new Error('El controlador WIA solo está disponible en Windows.'));
+    }
+    const escapedDevId = (deviceId || '').replace(/"/g, '`"');
+    const script = `
+      try {
+        $dm = New-Object -ComObject WIA.DeviceManager
+        $dev = $null
+        $devId = "${escapedDevId}"
+        if ($devId) {
+          foreach ($d in $dm.DeviceInfos) {
+            if ($d.DeviceID -eq $devId) { $dev = $d.Connect(); break }
+          }
+        }
+        if (-not $dev) {
+          foreach ($d in $dm.DeviceInfos) {
+            if ($d.Type -eq 1) { $dev = $d.Connect(); break }
+          }
+        }
+        if (-not $dev) { throw "No hay ningún escáner WIA conectado en Windows." }
+
+        $devName = try { $dev.Properties.Item("Name").Value } catch { "Escáner WIA" }
+
+        function Get-WiaInspectProp($obj, [int]$pid) {
+          if (-not $obj) { return $null }
+          try {
+            foreach ($p in $obj.Properties) {
+              if ($p.PropertyID -eq $pid) { return $p.Value }
+            }
+          } catch {}
+          return $null
+        }
+
+        $caps = Get-WiaInspectProp $dev 3086
+        $status = Get-WiaInspectProp $dev 3087
+        $select = Get-WiaInspectProp $dev 3088
+        $pages = Get-WiaInspectProp $dev 3096
+
+        $itemsInfo = @()
+        $feederIdx = $null
+        $flatbedIdx = $null
+
+        for ($i = 1; $i -le $dev.Items.Count; $i++) {
+          $it = $dev.Items.Item($i)
+          $name = Get-WiaInspectProp $it 4098
+          $cat = Get-WiaInspectProp $it 4125
+          $full = Get-WiaInspectProp $it 4099
+
+          $isFeeder = ($cat -match "FE138EB2|706220C7|BEA37992") -or ("$name $full" -match "(?i)(feeder|adf|alimentador|sheetfed)")
+          $isFlatbed = ($cat -match "FB607B1F") -or ("$name $full" -match "(?i)(flatbed|cristal|platen)")
+
+          if ($isFeeder -and -not $feederIdx) { $feederIdx = $i }
+          if ($isFlatbed -and -not $flatbedIdx) { $flatbedIdx = $i }
+
+          $fmts = @()
+          try { foreach ($f in $it.Formats) { $fmts += $f.ToString() } } catch {}
+
+          $itemsInfo += @{
+            index = $i
+            name = $name
+            category = $cat
+            fullName = $full
+            isFeeder = [bool]$isFeeder
+            isFlatbed = [bool]$isFlatbed
+            formats = $fmts
+          }
+        }
+
+        if (-not $feederIdx -and $dev.Items.Count -ge 2) { $feederIdx = 2 }
+        if (-not $flatbedIdx -and $dev.Items.Count -ge 1) { $flatbedIdx = 1 }
+
+        $hasPaperInAdf = if ($status -ne $null) { (($status -band 1) -ne 0) } else { $true }
+
+        @{
+          success = $true
+          deviceName = $devName
+          totalItems = $dev.Items.Count
+          rootProperties = @{
+            handlingCapabilities = $caps
+            handlingStatus = $status
+            handlingSelect = $select
+            pages = $pages
+            hasPaperInAdf = $hasPaperInAdf
+          }
+          items = $itemsInfo
+          recommendedFeederIndex = $feederIdx
+          recommendedFlatbedIndex = $flatbedIdx
+        } | ConvertTo-Json -Depth 5
+      } catch {
+        @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json
+      }
+    `;
+
+    exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${script.replace(/\n/g, ' ')}"`, (err, stdout, stderr) => {
+      try {
+        const res = JSON.parse((stdout || '').trim());
+        if (res.success) {
+          resolve(res);
+        } else {
+          reject(new Error(res.error || stderr || 'Error al inspeccionar WIA.'));
+        }
+      } catch (e) {
+        reject(new Error(stderr || stdout || 'Error al inspeccionar escáner WIA.'));
+      }
+    });
+  });
+}
+
 function scanWithWia({ duplex = false, source = 'Feeder', deviceId = '' } = {}) {
   return new Promise((resolve, reject) => {
     if (process.platform !== 'win32') {
@@ -568,23 +653,58 @@ function scanWithWia({ duplex = false, source = 'Feeder', deviceId = '' } = {}) 
           return $false
         }
 
+        function Get-WiaProp($obj, [int]$propId) {
+          if (-not $obj) { return $null }
+          try {
+            foreach ($p in $obj.Properties) {
+              if ($p.PropertyID -eq $propId) { return $p.Value }
+            }
+          } catch {}
+          return $null
+        }
+
         $targetHandling = if ("${reqSource}" -eq "Platen") { [int]2 } elseif (${isDuplex ? '$true' : '$false'}) { [int]5 } else { [int]1 }
-        Set-WiaProp $selectedDev 3088 $targetHandling
+        $okHandling = Set-WiaProp $selectedDev 3088 $targetHandling
+        if (-not $okHandling -and ${isDuplex ? '$true' : '$false'}) {
+          Set-WiaProp $selectedDev 3088 [int]1
+        }
         Set-WiaProp $selectedDev 3096 [int]0
-        try { foreach ($it in $selectedDev.Items) { Set-WiaProp $it 3088 $targetHandling } } catch {}
+
+        $feederItem = $null
+        $flatbedItem = $null
+        $detectedItems = @()
+
+        for ($i = 1; $i -le $selectedDev.Items.Count; $i++) {
+          $curIt = $selectedDev.Items.Item($i)
+          $curName = Get-WiaProp $curIt 4098
+          $curCat = Get-WiaProp $curIt 4125
+          $curFull = Get-WiaProp $curIt 4099
+          $detectedItems += "Canal \${i}: Nombre='$curName', Categoria='$curCat'"
+
+          $isFeeder = ($curCat -match "FE138EB2|706220C7|BEA37992") -or ("$curName $curFull" -match "(?i)(feeder|adf|alimentador|sheetfed)")
+          $isFlatbed = ($curCat -match "FB607B1F") -or ("$curName $curFull" -match "(?i)(flatbed|cristal|platen)")
+
+          if ($isFeeder -and -not $feederItem) { $feederItem = $curIt }
+          if ($isFlatbed -and -not $flatbedItem) { $flatbedItem = $curIt }
+        }
+
+        if (-not $feederItem -and $selectedDev.Items.Count -ge 2) { $feederItem = $selectedDev.Items.Item(2) }
+        if (-not $flatbedItem -and $selectedDev.Items.Count -ge 1) { $flatbedItem = $selectedDev.Items.Item(1) }
 
         $item = $null
-        if ($selectedDev.Items.Count -gt 0) {
-          if ("${reqSource}" -ne "Platen") {
-            foreach ($it in $selectedDev.Items) {
-              $itName = ""
-              try { $itName = $it.Properties.Item("Item Name").Value } catch {}
-              if ($itName -match "(?i)(feeder|adf|alimentador)") { $item = $it; break }
-            }
-          }
-          if (-not $item) { $item = $selectedDev.Items.Item(1) }
+        $channelName = ""
+        if ("${reqSource}" -eq "Platen") {
+          $item = if ($flatbedItem) { $flatbedItem } else { $selectedDev.Items.Item(1) }
+          $channelName = "Cristal Plano (Flatbed)"
+        } else {
+          $item = if ($feederItem) { $feederItem } else { $selectedDev.Items.Item(1) }
+          $channelName = "Alimentador Superior (ADF)"
         }
         if (-not $item) { throw "No se encontró canal de escaneo en el dispositivo WIA." }
+
+        Set-WiaProp $item 3088 $targetHandling
+        Set-WiaProp $item 3096 [int]0
+        try { foreach ($it in $selectedDev.Items) { Set-WiaProp $it 3088 $targetHandling; Set-WiaProp $it 3096 [int]0 } } catch {}
 
         $scansDir = "${escapedScansDir}"
         $pages = @()
@@ -596,22 +716,36 @@ function scanWithWia({ duplex = false, source = 'Feeder', deviceId = '' } = {}) 
         $bmpFormat  = "{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}"
         $pngFormat  = "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}"
 
+        $hasNativeJpeg = $false
+        try {
+          foreach ($f in $item.Formats) {
+            if ($f.ToString() -eq $jpegFormat) { $hasNativeJpeg = $true; break }
+          }
+        } catch {}
+        $preferredFormat = if ($hasNativeJpeg) { $jpegFormat } else { $bmpFormat }
+
         while ($hasMore -and $pageIdx -lt 100) {
           $img = $null
           $iterError = $null
-          try { $img = $item.Transfer($jpegFormat) } catch { $iterError = $_.Exception }
-          if (-not $img) { try { $img = $item.Transfer($bmpFormat) } catch { $iterError = $_.Exception } }
-          if (-not $img) { try { $img = $item.Transfer($pngFormat) } catch { $iterError = $_.Exception } }
+          try {
+            $img = $item.Transfer($preferredFormat)
+          } catch {
+            $iterError = $_.Exception
+            if ($pageIdx -eq 0) {
+              $altFormat = if ($preferredFormat -eq $jpegFormat) { $bmpFormat } else { $jpegFormat }
+              try { $img = $item.Transfer($altFormat); $preferredFormat = $altFormat } catch { $iterError = $_.Exception }
+            }
+          }
 
           if ($img) {
             $pageIdx++
             $ts = (Get-Date).ToString("yyyyMMdd_HHmmss")
             $rawExt = $img.FileExtension
             if (-not $rawExt) { $rawExt = "bmp" }
-            $tempRaw = Join-Path $scansDir "temp_wia_${ts}_$pageIdx.$rawExt"
+            $tempRaw = Join-Path $scansDir "temp_wia_\${ts}_\$pageIdx.$rawExt"
             $img.SaveFile($tempRaw)
 
-            $fn = "hp_wia_${ts}_cara$pageIdx.jpg"
+            $fn = "hp_wia_\${ts}_cara\$pageIdx.jpg"
             $save = Join-Path $scansDir $fn
 
             if ($rawExt.ToLower() -eq "jpg" -or $rawExt.ToLower() -eq "jpeg") {
@@ -637,7 +771,7 @@ function scanWithWia({ duplex = false, source = 'Feeder', deviceId = '' } = {}) 
 
         if ($pages.Count -eq 0) {
           $detail = if ($firstError) { " Detalle técnico: $($firstError.Message)" } else { "" }
-          throw "No se recibieron páginas del escáner WIA. Revisa papel en el ADF o cristal.$detail"
+          throw "No se recibieron páginas del escáner WIA. Revisa que haya hojas en el alimentador (ADF).$detail [Canal: $channelName]"
         }
         @{ success = $true; pages = $pages } | ConvertTo-Json -Depth 4
       } catch {
@@ -892,6 +1026,22 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: false, error: err.message, devices: [] }));
+    }
+    return;
+  }
+
+  // --------------------------------------------------------------------------
+  // API: Diagnóstico e Inspección de Canales WIA
+  // --------------------------------------------------------------------------
+  if (pathname === '/api/scanner/wia-inspect') {
+    try {
+      const deviceId = parsedUrl.query ? parsedUrl.query.deviceId : '';
+      const result = await inspectWia({ deviceId });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message }));
     }
     return;
   }

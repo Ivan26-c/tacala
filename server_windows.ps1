@@ -278,6 +278,110 @@ while ($listener.IsListening) {
     }
 
     # ---------------------------------------------------------
+    # API: Diagnóstico e Inspección de Canales WIA (ADF vs Flatbed)
+    # ---------------------------------------------------------
+    if ($rawPath -eq "/api/scanner/wia-inspect") {
+        try {
+            $dm = New-Object -ComObject WIA.DeviceManager
+            $dev = $null
+            $devId = $req.QueryString["deviceId"]
+            if ($devId) {
+                foreach ($d in $dm.DeviceInfos) {
+                    if ($d.DeviceID -eq $devId) { $dev = $d.Connect(); break }
+                }
+            }
+            if (-not $dev) {
+                foreach ($d in $dm.DeviceInfos) {
+                    if ($d.Type -eq 1) { $dev = $d.Connect(); break }
+                }
+            }
+            if (-not $dev) {
+                throw "No hay ningún escáner WIA conectado en Windows."
+            }
+
+            $devName = try { $dev.Properties.Item("Name").Value } catch { "Escáner WIA" }
+
+            function Get-WiaInspectProp($obj, [int]$pid) {
+                if (-not $obj) { return $null }
+                try {
+                    foreach ($p in $obj.Properties) {
+                        if ($p.PropertyID -eq $pid) { return $p.Value }
+                    }
+                } catch {}
+                return $null
+            }
+
+            $caps = Get-WiaInspectProp $dev 3086
+            $status = Get-WiaInspectProp $dev 3087
+            $select = Get-WiaInspectProp $dev 3088
+            $pages = Get-WiaInspectProp $dev 3096
+
+            $itemsInfo = @()
+            $feederIdx = $null
+            $flatbedIdx = $null
+
+            for ($i = 1; $i -le $dev.Items.Count; $i++) {
+                $it = $dev.Items.Item($i)
+                $name = Get-WiaInspectProp $it 4098
+                $cat = Get-WiaInspectProp $it 4125
+                $full = Get-WiaInspectProp $it 4099
+
+                $isFeeder = ($cat -match "FE138EB2|706220C7|BEA37992") -or ("$name $full" -match "(?i)(feeder|adf|alimentador|sheetfed)")
+                $isFlatbed = ($cat -match "FB607B1F") -or ("$name $full" -match "(?i)(flatbed|cristal|platen)")
+
+                if ($isFeeder -and -not $feederIdx) { $feederIdx = $i }
+                if ($isFlatbed -and -not $flatbedIdx) { $flatbedIdx = $i }
+
+                $fmts = @()
+                try { foreach ($f in $it.Formats) { $fmts += $f.ToString() } } catch {}
+
+                $itemsInfo += @{
+                    index = $i
+                    name = $name
+                    category = $cat
+                    fullName = $full
+                    isFeeder = [bool]$isFeeder
+                    isFlatbed = [bool]$isFlatbed
+                    formats = $fmts
+                }
+            }
+
+            if (-not $feederIdx -and $dev.Items.Count -ge 2) { $feederIdx = 2 }
+            if (-not $flatbedIdx -and $dev.Items.Count -ge 1) { $flatbedIdx = 1 }
+
+            $hasPaperInAdf = if ($status -ne $null) { (($status -band 1) -ne 0) } else { $true }
+
+            $resJson = @{
+                success = $true
+                deviceName = $devName
+                totalItems = $dev.Items.Count
+                rootProperties = @{
+                    handlingCapabilities = $caps
+                    handlingStatus = $status
+                    handlingSelect = $select
+                    pages = $pages
+                    hasPaperInAdf = $hasPaperInAdf
+                }
+                items = $itemsInfo
+                recommendedFeederIndex = $feederIdx
+                recommendedFlatbedIndex = $flatbedIdx
+            } | ConvertTo-Json -Depth 5
+
+            $buffer = [System.Text.Encoding]::UTF8.GetBytes($resJson)
+            $res.ContentType = "application/json"
+            $res.OutputStream.Write($buffer, 0, $buffer.Length)
+        } catch {
+            $errJson = @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json
+            $buffer = [System.Text.Encoding]::UTF8.GetBytes($errJson)
+            $res.StatusCode = 500
+            $res.ContentType = "application/json"
+            $res.OutputStream.Write($buffer, 0, $buffer.Length)
+        }
+        $res.Close()
+        continue
+    }
+
+    # ---------------------------------------------------------
     # API: Escaneo Directo con Controlador Windows WIA (HP Smart)
     # ---------------------------------------------------------
     if ($rawPath -eq "/api/scanner/wia-scan" -and $req.HttpMethod -eq "POST") {
@@ -346,89 +450,153 @@ while ($listener.IsListening) {
                 return $null
             }
 
-            # Configurar manejo de papel:
+            # Configurar manejo de papel en el dispositivo raíz:
             # 3088: WIA_DPS_DOCUMENT_HANDLING_SELECT (1=FEEDER, 2=FLATBED, 4=DUPLEX, 5=FEEDER+DUPLEX)
             $targetHandling = if ($reqSource -eq "Platen") { [int]2 } elseif ($isDuplex) { [int]5 } else { [int]1 }
-            Set-WiaProp $selectedDev 3088 $targetHandling
+            $okHandling = Set-WiaProp $selectedDev 3088 $targetHandling
+            if (-not $okHandling -and $isDuplex) {
+                Set-WiaProp $selectedDev 3088 [int]1
+            }
             Set-WiaProp $selectedDev 3096 [int]0
-
-            # También configurar en los Items del dispositivo
-            try {
-                foreach ($it in $selectedDev.Items) {
-                    Set-WiaProp $it 3088 $targetHandling
-                }
-            } catch {}
 
             # Comprobar estado del sensor ADF (3087) y capacidades (3086)
             $wiaCaps = Get-WiaProp $selectedDev 3086
             $wiaStatus = Get-WiaProp $selectedDev 3087
             Write-Host "  [WIA] Info de hardware -> Capacidades (3086): $wiaCaps | Estado ADF (3087): $wiaStatus" -ForegroundColor DarkCyan
 
+            $adfEmptyHint = ""
             if ($reqSource -ne "Platen" -and $wiaStatus -ne $null) {
                 if (($wiaStatus -band 1) -eq 0) {
+                    $adfEmptyHint = " El sensor de la impresora indica que NO detecta papel en la bandeja superior ADF. Empuja las hojas hacia adentro hasta escuchar el sonido/beep de la impresora."
                     Write-Host "  [WIA] Aviso: El sensor 3087 indica que el alimentador podría no detectar papel." -ForegroundColor Yellow
                 }
             }
 
-            # Seleccionar ítem de escaneo (canal de digitalización)
+            # ---------------------------------------------------------
+            # Selector de Canal de Digitalización (WIA Item)
+            # En WIA 2.0 (HP, Canon, Brother, Epson):
+            # Item(1) = Flatbed (Cristal)
+            # Item(2) = Feeder (Alimentador ADF)
+            # ---------------------------------------------------------
+            $feederItem = $null
+            $flatbedItem = $null
+            $detectedItems = @()
+
+            Write-Host "  [WIA] Analizando canales disponibles en el escáner ($($selectedDev.Items.Count))..." -ForegroundColor Cyan
+            for ($i = 1; $i -le $selectedDev.Items.Count; $i++) {
+                $curIt = $selectedDev.Items.Item($i)
+                $curName = Get-WiaProp $curIt 4098   # WIA_IPA_ITEM_NAME
+                $curCat = Get-WiaProp $curIt 4125    # WIA_IPA_ITEM_CATEGORY
+                $curFull = Get-WiaProp $curIt 4099   # WIA_IPA_FULL_ITEM_NAME
+
+                $infoStr = "Canal ${i}: Nombre='$curName', Categoria='$curCat'"
+                $detectedItems += $infoStr
+                Write-Host "    $infoStr" -ForegroundColor DarkGray
+
+                # Detectar Feeder / ADF por categoría estándar WIA 2.0 o nombre:
+                # {FE138EB2-EDAC-4B0C-B513-C3D887AB5077} (FEEDER)
+                # {706220C7-93BF-42AA-8A81-E60BF3AC4E83} (FEEDER_FRONT)
+                # {BEA37992-0545-42BC-8356-C31BEF8A52BE} (FEEDER_BACK)
+                $isFeeder = ($curCat -match "FE138EB2|706220C7|BEA37992") -or 
+                            ("$curName $curFull" -match "(?i)(feeder|adf|alimentador|sheetfed)")
+
+                # Detectar Flatbed / Cristal por categoría estándar WIA 2.0 o nombre:
+                # {FB607B1F-43F3-488B-855B-FB703EC342A6} (FLATBED)
+                $isFlatbed = ($curCat -match "FB607B1F") -or 
+                             ("$curName $curFull" -match "(?i)(flatbed|cristal|platen)")
+
+                if ($isFeeder -and -not $feederItem) {
+                    $feederItem = $curIt
+                    Write-Host "    -> Canal $i reconocido como ALIMENTADOR (ADF)" -ForegroundColor Green
+                }
+                if ($isFlatbed -and -not $flatbedItem) {
+                    $flatbedItem = $curIt
+                    Write-Host "    -> Canal $i reconocido como CRISTAL (Flatbed)" -ForegroundColor Green
+                }
+            }
+
+            # Convención estándar WIA para multifuncionales HP si no hubo coincidencia por GUID/Nombre:
+            # Canal 1 = Cristal (Flatbed) | Canal 2 = Alimentador (Feeder)
+            if (-not $feederItem -and $selectedDev.Items.Count -ge 2) {
+                $feederItem = $selectedDev.Items.Item(2)
+                Write-Host "    -> Asignando Canal 2 como Alimentador (convención estándar WIA)" -ForegroundColor DarkCyan
+            }
+            if (-not $flatbedItem -and $selectedDev.Items.Count -ge 1) {
+                $flatbedItem = $selectedDev.Items.Item(1)
+                Write-Host "    -> Asignando Canal 1 como Cristal (convención estándar WIA)" -ForegroundColor DarkCyan
+            }
+
+            # Seleccionar ítem según origen pedido
             $item = $null
-            if ($selectedDev.Items.Count -gt 0) {
-                if ($reqSource -ne "Platen") {
-                    foreach ($it in $selectedDev.Items) {
-                        $itName = ""
-                        try { $itName = $it.Properties.Item("Item Name").Value } catch {}
-                        if ($itName -match "(?i)(feeder|adf|alimentador)") {
-                            $item = $it
-                            Write-Host "  [WIA] Usando ítem específico de alimentador: '$itName'" -ForegroundColor DarkGray
-                            break
-                        }
-                    }
-                }
-                if (-not $item) {
-                    $item = $selectedDev.Items.Item(1)
-                }
+            $channelName = ""
+            if ($reqSource -eq "Platen") {
+                $item = if ($flatbedItem) { $flatbedItem } else { $selectedDev.Items.Item(1) }
+                $channelName = "Cristal Plano (Flatbed)"
+            } else {
+                $item = if ($feederItem) { $feederItem } else { $selectedDev.Items.Item(1) }
+                $channelName = "Alimentador Superior (ADF)"
             }
 
             if (-not $item) {
                 throw "El escáner WIA no tiene ningún canal de digitalización disponible."
             }
+            Write-Host "  [WIA] Canal activo para la sesión: $channelName" -ForegroundColor Cyan
+
+            # Configurar propiedades en el canal/ítem seleccionado
+            Set-WiaProp $item 3088 $targetHandling
+            Set-WiaProp $item 3096 [int]0
+
+            # Intentar configurar también en todos los ítems por compatibilidad con drivers híbridos
+            try {
+                foreach ($it in $selectedDev.Items) {
+                    Set-WiaProp $it 3088 $targetHandling
+                    Set-WiaProp $it 3096 [int]0
+                }
+            } catch {}
 
             $pagesList = @()
             $hasMore = $true
             $pageIndex = 0
             $firstError = $null
 
-            # GUIDs estándar de WIA Automation
+            # GUIDs estándar de formatos WIA
             $jpegFormat = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}"
             $bmpFormat  = "{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}"
             $pngFormat  = "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}"
+
+            # Verificar si el canal soporta JPEG nativo sin error
+            $hasNativeJpeg = $false
+            try {
+                foreach ($f in $item.Formats) {
+                    if ($f.ToString() -eq $jpegFormat) {
+                        $hasNativeJpeg = $true
+                        break
+                    }
+                }
+            } catch {}
+
+            # Usar BMP nativo preferentemente para máxima estabilidad del alimentador HP
+            # BMP es soportado por el 100% de controladores WIA y luego se comprime a JPEG en memoria.
+            $preferredFormat = if ($hasNativeJpeg) { $jpegFormat } else { $bmpFormat }
+            Write-Host "  [WIA] Formato de imagen: $(if ($preferredFormat -eq $jpegFormat) {'JPEG Nativo'} else {'BMP Nativo (conversión JPEG automática)'})" -ForegroundColor DarkGray
 
             while ($hasMore -and $pageIndex -lt 100) {
                 $img = $null
                 $iterError = $null
 
-                # 1. Intentar JPEG
                 try {
-                    $img = $item.Transfer($jpegFormat)
+                    $img = $item.Transfer($preferredFormat)
                 } catch {
                     $iterError = $_.Exception
-                }
-
-                # 2. Si falló JPEG, intentar BMP nativo (soportado por el 100% de controladores WIA de HP)
-                if (-not $img) {
-                    try {
-                        $img = $item.Transfer($bmpFormat)
-                    } catch {
-                        $iterError = $_.Exception
-                    }
-                }
-
-                # 3. Si falló BMP, intentar PNG
-                if (-not $img) {
-                    try {
-                        $img = $item.Transfer($pngFormat)
-                    } catch {
-                        $iterError = $_.Exception
+                    # Fallback inmediato en la primera página si el formato no fue admitido
+                    if ($pageIndex -eq 0) {
+                        $altFormat = if ($preferredFormat -eq $jpegFormat) { $bmpFormat } else { $jpegFormat }
+                        try {
+                            $img = $item.Transfer($altFormat)
+                            $preferredFormat = $altFormat
+                        } catch {
+                            $iterError = $_.Exception
+                        }
                     }
                 }
 
@@ -447,7 +615,6 @@ while ($listener.IsListening) {
                     if ($rawExt.ToLower() -eq "jpg" -or $rawExt.ToLower() -eq "jpeg") {
                         Move-Item $tempRaw $savePath -Force
                     } else {
-                        # Convertir BMP o PNG a JPEG mediante System.Drawing para optimizar peso y compatibilidad web
                         try {
                             $drawingImg = [System.Drawing.Image]::FromFile($tempRaw)
                             $drawingImg.Save($savePath, [System.Drawing.Imaging.ImageFormat]::Jpeg)
@@ -471,20 +638,20 @@ while ($listener.IsListening) {
                         $hasMore = $false
                     }
                 } else {
-                    # Transferencia no devolvió imagen o lanzó error
                     if ($pageIndex -eq 0) {
                         $firstError = $iterError
                         Write-Host "  [WIA Error en página 1]: $($iterError.Message)" -ForegroundColor Red
                     } else {
-                        Write-Host "  [WIA] Fin de páginas en el alimentador (total caras recibidas: $pageIndex)" -ForegroundColor DarkCyan
+                        Write-Host "  [WIA] Alimentador completado (total caras recibidas: $pageIndex)" -ForegroundColor Green
                     }
                     $hasMore = $false
                 }
             }
 
             if ($pagesList.Count -eq 0) {
-                $detail = if ($firstError) { " Detalle técnico del controlador WIA: $($firstError.Message)" } else { "" }
-                throw "No se recibieron páginas del escáner WIA. Revisa que las hojas estén colocadas firmemente en el alimentador superior (ADF) o en el cristal.$detail"
+                $detail = if ($firstError) { " Detalle técnico del controlador: $($firstError.Message)" } else { "" }
+                $channelInfo = " [Canal utilizado: $channelName | Canales detectados: $($detectedItems -join '; ')]"
+                throw "No se recibieron páginas del escáner WIA. Revisa que las hojas estén colocadas firmemente en el alimentador superior (ADF).$adfEmptyHint$detail$channelInfo"
             }
 
             Write-Host "[Tacala] Escaneo WIA completado con éxito. Total caras: $($pagesList.Count)" -ForegroundColor Green
@@ -516,8 +683,8 @@ while ($listener.IsListening) {
         $isDuplex = [bool]$params.duplex
         $reqSource = if ($params.source) { $params.source } else { "Feeder" }
 
-        # Para HP, el alimentador superior en eSCL se identifica como 'Adf' o 'Feeder'
-        $actualSource = if ($reqSource -eq "Platen" -and -not $isDuplex) { "Platen" } else { "Adf" }
+        # Para HP y estándar PWG, el alimentador superior se identifica como 'Feeder'
+        $actualSource = if ($reqSource -eq "Platen" -and -not $isDuplex) { "Platen" } else { "Feeder" }
         $color = if ($params.colorMode -eq "Grayscale") { "Grayscale8" } elseif ($params.colorMode -eq "Mono") { "BlackAndWhite1" } else { "RGB24" }
         $resDpi = if ($params.resolution) { [int]$params.resolution } else { 300 }
 
@@ -527,7 +694,7 @@ while ($listener.IsListening) {
         # Variantes de ScanSettings para máxima compatibilidad con HP eSCL
         $variants = @()
         if ($isDuplex) {
-            # Variante 0: HP Adf Duplex PDF (Formato nativo de Single-Pass Duplex de HP eSCL)
+            # Variante 0: HP Feeder Duplex PDF (Formato nativo Single-Pass Duplex de HP eSCL)
             $vPdf = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -540,8 +707,8 @@ while ($listener.IsListening) {
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <pwg:InputSource>Adf</pwg:InputSource>
-  <scan:InputSource>Adf</scan:InputSource>
+  <pwg:InputSource>Feeder</pwg:InputSource>
+  <scan:InputSource>Feeder</scan:InputSource>
   <scan:ColorMode>$color</scan:ColorMode>
   <scan:XResolution>$resDpi</scan:XResolution>
   <scan:YResolution>$resDpi</scan:YResolution>
@@ -552,7 +719,7 @@ while ($listener.IsListening) {
   <scan:Duplex>true</scan:Duplex>
 </scan:ScanSettings>
 "@
-            # Variante 1: HP ADF Oficial (Adf + AdfOptions Duplex + Duplex true)
+            # Variante 1: HP Feeder Oficial JPEG (Feeder + AdfOptions Duplex + Duplex true)
             $v1 = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -565,8 +732,8 @@ while ($listener.IsListening) {
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <pwg:InputSource>Adf</pwg:InputSource>
-  <scan:InputSource>Adf</scan:InputSource>
+  <pwg:InputSource>Feeder</pwg:InputSource>
+  <scan:InputSource>Feeder</scan:InputSource>
   <scan:ColorMode>$color</scan:ColorMode>
   <scan:XResolution>$resDpi</scan:XResolution>
   <scan:YResolution>$resDpi</scan:YResolution>
@@ -577,7 +744,7 @@ while ($listener.IsListening) {
   <scan:Duplex>true</scan:Duplex>
 </scan:ScanSettings>
 "@
-            # Variante 2: HP Feeder con AdfOptions (Feeder + AdfOptions Duplex + Duplex true)
+            # Variante 2: HP Feeder con DuplexMode TwoSidedLongEdge
             $v2 = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -595,37 +762,13 @@ while ($listener.IsListening) {
   <scan:ColorMode>$color</scan:ColorMode>
   <scan:XResolution>$resDpi</scan:XResolution>
   <scan:YResolution>$resDpi</scan:YResolution>
-  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
-  <scan:AdfOptions>
-    <scan:AdfOption>Duplex</scan:AdfOption>
-  </scan:AdfOptions>
+  <pwg:DocumentFormat>application/pdf</pwg:DocumentFormat>
+  <scan:DuplexMode>TwoSidedLongEdge</scan:DuplexMode>
   <scan:Duplex>true</scan:Duplex>
 </scan:ScanSettings>
 "@
-            # Variante 3: HP Adf estándar (Adf + scan:Duplex booleano)
+            # Variante 3: HP Feeder estándar (Feeder + scan:Duplex booleano)
             $v3 = @"
-<?xml version="1.0" encoding="UTF-8"?>
-<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
-  <pwg:Version>2.0</pwg:Version>
-  <pwg:ScanRegions>
-    <pwg:ScanRegion>
-      <pwg:Height>$hPx</pwg:Height>
-      <pwg:Width>$wPx</pwg:Width>
-      <pwg:XOffset>0</pwg:XOffset>
-      <pwg:YOffset>0</pwg:YOffset>
-    </pwg:ScanRegion>
-  </pwg:ScanRegions>
-  <pwg:InputSource>Adf</pwg:InputSource>
-  <scan:InputSource>Adf</scan:InputSource>
-  <scan:ColorMode>$color</scan:ColorMode>
-  <scan:XResolution>$resDpi</scan:XResolution>
-  <scan:YResolution>$resDpi</scan:YResolution>
-  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
-  <scan:Duplex>true</scan:Duplex>
-</scan:ScanSettings>
-"@
-            # Variante 4: HP Feeder estándar (Feeder + scan:Duplex booleano)
-            $v4 = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
   <pwg:Version>2.0</pwg:Version>
@@ -646,12 +789,37 @@ while ($listener.IsListening) {
   <scan:Duplex>true</scan:Duplex>
 </scan:ScanSettings>
 "@
+            # Variante 4: HP Adf (fallback específico de compatibilidad de esquema propietario HP)
+            $v4 = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>$hPx</pwg:Height>
+      <pwg:Width>$wPx</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>Feeder</pwg:InputSource>
+  <scan:InputSource>Adf</scan:InputSource>
+  <scan:ColorMode>$color</scan:ColorMode>
+  <scan:XResolution>$resDpi</scan:XResolution>
+  <scan:YResolution>$resDpi</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:AdfOptions>
+    <scan:AdfOption>Duplex</scan:AdfOption>
+  </scan:AdfOptions>
+  <scan:Duplex>true</scan:Duplex>
+</scan:ScanSettings>
+"@
             $variants = @(
-                @{ name = "HP Adf Duplex PDF (Adf + Duplex + PDF)"; xml = $vPdf },
-                @{ name = "HP Adf Duplex (Adf + AdfOptions + Duplex)"; xml = $v1 },
-                @{ name = "HP Feeder Duplex (Feeder + AdfOptions + Duplex)"; xml = $v2 },
-                @{ name = "HP Adf Duplex (Adf + Duplex)"; xml = $v3 },
-                @{ name = "HP Feeder Duplex (Feeder + Duplex)"; xml = $v4 }
+                @{ name = "HP Feeder Duplex PDF (Feeder + Duplex + PDF)"; xml = $vPdf },
+                @{ name = "HP Feeder Duplex JPEG (Feeder + AdfOptions + Duplex)"; xml = $v1 },
+                @{ name = "HP Feeder DuplexMode (TwoSidedLongEdge + PDF)"; xml = $v2 },
+                @{ name = "HP Feeder Duplex (Feeder + Duplex)"; xml = $v3 },
+                @{ name = "HP Hybrid Adf (Feeder + scan:Adf + Duplex)"; xml = $v4 }
             )
         } else {
             $simplexXml = @"

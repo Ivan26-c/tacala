@@ -96,7 +96,9 @@ if (typeof pdfjsLib !== 'undefined') {
     wiaDeviceSection: document.getElementById('wiaDeviceSection'),
     wiaDeviceSelect: document.getElementById('wiaDeviceSelect'),
     btnRefreshWia: document.getElementById('btnRefreshWia'),
+    btnInspectWia: document.getElementById('btnInspectWia'),
     wiaStatusHint: document.getElementById('wiaStatusHint'),
+    wiaInspectBox: document.getElementById('wiaInspectBox'),
     cardSourceAdf: document.getElementById('cardSourceAdf'),
     cardSourcePlaten: document.getElementById('cardSourcePlaten'),
     btnDuplexNo: document.getElementById('btnDuplexNo'),
@@ -712,6 +714,42 @@ if (typeof pdfjsLib !== 'undefined') {
 
     // Botón refrescar dispositivos WIA
     DOM.btnRefreshWia.addEventListener('click', loadWiaDevices);
+
+    // Botón diagnosticar canales WIA (ADF / Cristal)
+    if (DOM.btnInspectWia) {
+      DOM.btnInspectWia.addEventListener('click', async () => {
+        const deviceId = DOM.wiaDeviceSelect ? DOM.wiaDeviceSelect.value : '';
+        if (DOM.wiaInspectBox) {
+          DOM.wiaInspectBox.classList.remove('hidden');
+          DOM.wiaInspectBox.innerHTML = '<i class="fa-solid fa-spinner fa-spin" style="color:#38bdf8;"></i> Inspeccionando canales WIA del escáner en Windows...';
+        }
+        try {
+          const res = await fetch(`/api/scanner/wia-inspect?deviceId=${encodeURIComponent(deviceId)}`);
+          const data = await res.json();
+          if (!data.success) throw new Error(data.error);
+
+          let html = `<div style="font-weight:700;color:#f8fafc;margin-bottom:0.25rem;"><i class="fa-solid fa-print" style="color:#38bdf8;"></i> ${escapeHtml(data.deviceName)} (${data.totalItems} canales detectados)</div>`;
+          if (data.items && data.items.length > 0) {
+            data.items.forEach(it => {
+              const typeBadge = it.isFeeder
+                ? '<span style="color:#22c55e;font-weight:700;">[ALIMENTADOR ADF]</span>'
+                : (it.isFlatbed ? '<span style="color:#38bdf8;font-weight:700;">[CRISTAL PLANO]</span>' : '<span style="color:#94a3b8;">[CANAL]</span>');
+              html += `<div>• Canal ${it.index}: ${typeBadge} <em>${escapeHtml(it.name || 'Sin nombre')}</em></div>`;
+            });
+          }
+          const hasPaper = data.rootProperties && data.rootProperties.hasPaperInAdf;
+          const paperStatus = hasPaper
+            ? '<div style="color:#22c55e;margin-top:0.35rem;"><i class="fa-solid fa-circle-check"></i> Sensor ADF: Con papel detectado. Listo para arrastrar hojas.</div>'
+            : '<div style="color:#f59e0b;margin-top:0.35rem;"><i class="fa-solid fa-triangle-exclamation"></i> Sensor ADF: Sin papel detectado (coloca las hojas firmemente en la bandeja superior hasta escuchar el sonidito).</div>';
+          html += paperStatus;
+          if (DOM.wiaInspectBox) DOM.wiaInspectBox.innerHTML = html;
+        } catch (err) {
+          if (DOM.wiaInspectBox) {
+            DOM.wiaInspectBox.innerHTML = `<span style="color:#ef4444;"><i class="fa-solid fa-circle-exclamation"></i> Error al diagnosticar: ${escapeHtml(err.message)}</span>`;
+          }
+        }
+      });
+    }
 
     // Origen de hojas: ADF vs Cristal
     DOM.cardSourceAdf.addEventListener('click', () => {

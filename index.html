@@ -215,9 +215,14 @@
         <div class="wia-device-section" id="wiaDeviceSection">
           <div class="wia-header-row">
             <label class="section-label"><i class="fa-solid fa-print"></i> Escáner en Windows:</label>
-            <button type="button" class="btn-refresh-clean" id="btnRefreshWia">
-              <i class="fa-solid fa-arrows-rotate"></i> Detectar
-            </button>
+            <div style="display:flex;gap:0.4rem;">
+              <button type="button" class="btn-refresh-clean" id="btnInspectWia" title="Diagnosticar canales del alimentador y cristal en Windows">
+                <i class="fa-solid fa-microchip"></i> Diagnosticar ADF
+              </button>
+              <button type="button" class="btn-refresh-clean" id="btnRefreshWia">
+                <i class="fa-solid fa-arrows-rotate"></i> Detectar
+              </button>
+            </div>
           </div>
           <select id="wiaDeviceSelect" class="clean-select" style="width: 100%;">
             <option value="">Buscando escáner HP LaserJet Pro...</option>
@@ -226,6 +231,7 @@
             <i class="fa-solid fa-circle-check" style="color:#22c55e;"></i>
             <span>Conectado al controlador oficial de HP en Windows (mismo que HP Smart).</span>
           </div>
+          <div id="wiaInspectBox" class="hidden" style="margin-top:0.5rem;padding:0.6rem;background:#0f172a;border-radius:6px;border:1px solid #334155;font-size:0.75rem;color:#cbd5e1;line-height:1.5;"></div>
         </div>
         
         <!-- Opción 1: ¿Dónde están las hojas? -->
