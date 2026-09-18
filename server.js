@@ -168,6 +168,32 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   const variants = [];
   if (isDuplex) {
     variants.push({
+      name: 'HP Adf Duplex PDF (Adf + Duplex + PDF)',
+      xml: `<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>${heightPx}</pwg:Height>
+      <pwg:Width>${widthPx}</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>Adf</pwg:InputSource>
+  <scan:InputSource>Adf</scan:InputSource>
+  <scan:ColorMode>${normalizedColor}</scan:ColorMode>
+  <scan:XResolution>${resolution}</scan:XResolution>
+  <scan:YResolution>${resolution}</scan:YResolution>
+  <pwg:DocumentFormat>application/pdf</pwg:DocumentFormat>
+  <scan:AdfOptions>
+    <scan:AdfOption>Duplex</scan:AdfOption>
+  </scan:AdfOptions>
+  <scan:Duplex>true</scan:Duplex>
+</scan:ScanSettings>`
+    });
+
+    variants.push({
       name: 'HP Adf Duplex (Adf + AdfOptions + Duplex)',
       xml: `<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -363,19 +389,31 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
 
         if (docRes.statusCode === 200) {
           const imgBytes = docRes.data;
+          const isPdf = imgBytes.length >= 4 && imgBytes[0] === 0x25 && imgBytes[1] === 0x50 && imgBytes[2] === 0x44 && imgBytes[3] === 0x46;
           const b64 = imgBytes.toString('base64');
-          const dataUrl = `data:image/jpeg;base64,${b64}`;
-
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const filename = `hp4103_${timestamp}_cara${pageNum}.jpg`;
-          const savePath = path.join(SCANS_DIR, filename);
-          fs.writeFileSync(savePath, imgBytes);
 
-          scannedPages.push({ dataUrl, type: 'image', filename });
-          console.log(`[Tacala] -> Cara ${pageNum} escaneada y recibida (${Math.round(imgBytes.length / 1024)} KB)`);
-          gotPage = true;
-          consecutive404 = 0;
-          break;
+          if (isPdf) {
+            const filename = `hp4103_${timestamp}_duplex.pdf`;
+            const savePath = path.join(SCANS_DIR, filename);
+            fs.writeFileSync(savePath, imgBytes);
+            scannedPages.push({ dataUrl: `data:application/pdf;base64,${b64}`, type: 'pdf', filename });
+            console.log(`[Tacala] -> Documento PDF dúplex completo recibido (${Math.round(imgBytes.length / 1024)} KB)`);
+            gotPage = true;
+            consecutive404 = 0;
+            break; // Todo el documento dúplex está en el PDF
+          } else {
+            const dataUrl = `data:image/jpeg;base64,${b64}`;
+            const filename = `hp4103_${timestamp}_cara${pageNum}.jpg`;
+            const savePath = path.join(SCANS_DIR, filename);
+            fs.writeFileSync(savePath, imgBytes);
+
+            scannedPages.push({ dataUrl, type: 'image', filename });
+            console.log(`[Tacala] -> Cara ${pageNum} escaneada y recibida (${Math.round(imgBytes.length / 1024)} KB)`);
+            gotPage = true;
+            consecutive404 = 0;
+            break;
+          }
         } else if (docRes.statusCode === 503) {
           console.log(`[Tacala] Procesando cara ${pageNum} (impresora ocupada - 503)... esperando (${retries + 1}/${maxRetriesForPage})`);
           retries++;
@@ -502,6 +540,7 @@ function scanWithWia({ duplex = false, source = 'Feeder', deviceId = '' } = {}) 
 
     const script = `
       try {
+        Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
         $dm = New-Object -ComObject WIA.DeviceManager
         $selectedDev = $null
         $devId = "${escapedDevId}"
@@ -518,39 +557,88 @@ function scanWithWia({ duplex = false, source = 'Feeder', deviceId = '' } = {}) 
         if (-not $selectedDev) {
           throw "No se encontró ningún escáner WIA compatible en Windows."
         }
-        try {
-          $prop = $selectedDev.Properties.Item("3088")
-          if ("${reqSource}" -eq "Platen") { $prop.Value = 2 }
-          elseif (${isDuplex ? '$true' : '$false'}) { $prop.Value = 5 }
-          else { $prop.Value = 1 }
-        } catch {}
-        try { $selectedDev.Properties.Item("3096").Value = 0 } catch {}
+
+        function Set-WiaProp($obj, [int]$propId, $val) {
+          if (-not $obj) { return $false }
+          try {
+            foreach ($p in $obj.Properties) {
+              if ($p.PropertyID -eq $propId) { $p.Value = $val; return $true }
+            }
+          } catch {}
+          return $false
+        }
+
+        $targetHandling = if ("${reqSource}" -eq "Platen") { [int]2 } elseif (${isDuplex ? '$true' : '$false'}) { [int]5 } else { [int]1 }
+        Set-WiaProp $selectedDev 3088 $targetHandling
+        Set-WiaProp $selectedDev 3096 [int]0
+        try { foreach ($it in $selectedDev.Items) { Set-WiaProp $it 3088 $targetHandling } } catch {}
+
+        $item = $null
+        if ($selectedDev.Items.Count -gt 0) {
+          if ("${reqSource}" -ne "Platen") {
+            foreach ($it in $selectedDev.Items) {
+              $itName = ""
+              try { $itName = $it.Properties.Item("Item Name").Value } catch {}
+              if ($itName -match "(?i)(feeder|adf|alimentador)") { $item = $it; break }
+            }
+          }
+          if (-not $item) { $item = $selectedDev.Items.Item(1) }
+        }
+        if (-not $item) { throw "No se encontró canal de escaneo en el dispositivo WIA." }
 
         $scansDir = "${escapedScansDir}"
         $pages = @()
         $hasMore = $true
         $pageIdx = 0
-        $fmt = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}"
+        $firstError = $null
+
+        $jpegFormat = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}"
+        $bmpFormat  = "{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}"
+        $pngFormat  = "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}"
 
         while ($hasMore -and $pageIdx -lt 100) {
-          try {
-            $item = $selectedDev.Items.Item(1)
-            $img = $null
-            try { $img = $item.Transfer($fmt) } catch { $img = $item.Transfer() }
-            if ($img) {
-              $pageIdx++
-              $ts = (Get-Date).ToString("yyyyMMdd_HHmmss")
-              $fn = "hp_wia_${ts}_cara$pageIdx.jpg"
-              $save = Join-Path $scansDir $fn
-              $img.SaveFile($save)
-              $bytes = [System.IO.File]::ReadAllBytes($save)
-              $b64 = [Convert]::ToBase64String($bytes)
-              $pages += @{ dataUrl = "data:image/jpeg;base64,$b64"; type = "image"; filename = $fn }
-              if ("${reqSource}" -eq "Platen") { $hasMore = $false }
-            } else { $hasMore = $false }
-          } catch { $hasMore = $false }
+          $img = $null
+          $iterError = $null
+          try { $img = $item.Transfer($jpegFormat) } catch { $iterError = $_.Exception }
+          if (-not $img) { try { $img = $item.Transfer($bmpFormat) } catch { $iterError = $_.Exception } }
+          if (-not $img) { try { $img = $item.Transfer($pngFormat) } catch { $iterError = $_.Exception } }
+
+          if ($img) {
+            $pageIdx++
+            $ts = (Get-Date).ToString("yyyyMMdd_HHmmss")
+            $rawExt = $img.FileExtension
+            if (-not $rawExt) { $rawExt = "bmp" }
+            $tempRaw = Join-Path $scansDir "temp_wia_${ts}_$pageIdx.$rawExt"
+            $img.SaveFile($tempRaw)
+
+            $fn = "hp_wia_${ts}_cara$pageIdx.jpg"
+            $save = Join-Path $scansDir $fn
+
+            if ($rawExt.ToLower() -eq "jpg" -or $rawExt.ToLower() -eq "jpeg") {
+              Move-Item $tempRaw $save -Force
+            } else {
+              try {
+                $drawingImg = [System.Drawing.Image]::FromFile($tempRaw)
+                $drawingImg.Save($save, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+                $drawingImg.Dispose()
+                Remove-Item $tempRaw -Force -ErrorAction SilentlyContinue
+              } catch { Move-Item $tempRaw $save -Force }
+            }
+
+            $bytes = [System.IO.File]::ReadAllBytes($save)
+            $b64 = [Convert]::ToBase64String($bytes)
+            $pages += @{ dataUrl = "data:image/jpeg;base64,$b64"; type = "image"; filename = $fn }
+            if ("${reqSource}" -eq "Platen") { $hasMore = $false }
+          } else {
+            if ($pageIdx -eq 0) { $firstError = $iterError }
+            $hasMore = $false
+          }
         }
-        if ($pages.Count -eq 0) { throw "No se obtuvieron hojas del alimentador o cristal." }
+
+        if ($pages.Count -eq 0) {
+          $detail = if ($firstError) { " Detalle técnico: $($firstError.Message)" } else { "" }
+          throw "No se recibieron páginas del escáner WIA. Revisa papel en el ADF o cristal.$detail"
+        }
         @{ success = $true; pages = $pages } | ConvertTo-Json -Depth 4
       } catch {
         @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json

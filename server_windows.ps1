@@ -282,6 +282,8 @@ while ($listener.IsListening) {
     # ---------------------------------------------------------
     if ($rawPath -eq "/api/scanner/wia-scan" -and $req.HttpMethod -eq "POST") {
         try {
+            Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
+
             $reader = New-Object System.IO.StreamReader($req.InputStream)
             $body = $reader.ReadToEnd()
             $params = $body | ConvertFrom-Json
@@ -315,72 +317,174 @@ while ($listener.IsListening) {
                 throw "No se encontró ningún escáner compatible en Windows. Asegúrate de que el escáner o HP Smart esté encendido y conectado por USB o red."
             }
 
-            # Configuración de propiedades WIA:
-            # 3088: WIA_DPS_DOCUMENT_HANDLING_SELECT (1=FEEDER, 2=FLATBED, 4=DUPLEX, 5=FEEDER+DUPLEX)
-            try {
-                $handlingProp = $selectedDev.Properties.Item("3088")
-                if ($reqSource -eq "Platen") {
-                    $handlingProp.Value = 2
-                } elseif ($isDuplex) {
-                    $handlingProp.Value = 5
-                } else {
-                    $handlingProp.Value = 1
+            # Funciones auxiliares para asignar y leer propiedades WIA de forma segura por PropertyID
+            function Set-WiaProp($obj, [int]$propId, $val) {
+                if (-not $obj) { return $false }
+                try {
+                    foreach ($p in $obj.Properties) {
+                        if ($p.PropertyID -eq $propId) {
+                            $p.Value = $val
+                            Write-Host "  [WIA] Propiedad $propId ($($p.Name)) configurada a $val" -ForegroundColor DarkGray
+                            return $true
+                        }
+                    }
+                } catch {
+                    Write-Host "  [WIA] Aviso al configurar prop $propId : $($_.Exception.Message)" -ForegroundColor DarkGray
                 }
-            } catch {
-                Write-Host "  [WIA] Aviso al configurar 3088 (Handling): $($_.Exception.Message)" -ForegroundColor DarkGray
+                return $false
             }
 
-            # 3096: WIA_DPS_PAGES (0 = todas las páginas del alimentador)
+            function Get-WiaProp($obj, [int]$propId) {
+                if (-not $obj) { return $null }
+                try {
+                    foreach ($p in $obj.Properties) {
+                        if ($p.PropertyID -eq $propId) {
+                            return $p.Value
+                        }
+                    }
+                } catch {}
+                return $null
+            }
+
+            # Configurar manejo de papel:
+            # 3088: WIA_DPS_DOCUMENT_HANDLING_SELECT (1=FEEDER, 2=FLATBED, 4=DUPLEX, 5=FEEDER+DUPLEX)
+            $targetHandling = if ($reqSource -eq "Platen") { [int]2 } elseif ($isDuplex) { [int]5 } else { [int]1 }
+            Set-WiaProp $selectedDev 3088 $targetHandling
+            Set-WiaProp $selectedDev 3096 [int]0
+
+            # También configurar en los Items del dispositivo
             try {
-                $pagesProp = $selectedDev.Properties.Item("3096")
-                $pagesProp.Value = 0
+                foreach ($it in $selectedDev.Items) {
+                    Set-WiaProp $it 3088 $targetHandling
+                }
             } catch {}
+
+            # Comprobar estado del sensor ADF (3087) y capacidades (3086)
+            $wiaCaps = Get-WiaProp $selectedDev 3086
+            $wiaStatus = Get-WiaProp $selectedDev 3087
+            Write-Host "  [WIA] Info de hardware -> Capacidades (3086): $wiaCaps | Estado ADF (3087): $wiaStatus" -ForegroundColor DarkCyan
+
+            if ($reqSource -ne "Platen" -and $wiaStatus -ne $null) {
+                if (($wiaStatus -band 1) -eq 0) {
+                    Write-Host "  [WIA] Aviso: El sensor 3087 indica que el alimentador podría no detectar papel." -ForegroundColor Yellow
+                }
+            }
+
+            # Seleccionar ítem de escaneo (canal de digitalización)
+            $item = $null
+            if ($selectedDev.Items.Count -gt 0) {
+                if ($reqSource -ne "Platen") {
+                    foreach ($it in $selectedDev.Items) {
+                        $itName = ""
+                        try { $itName = $it.Properties.Item("Item Name").Value } catch {}
+                        if ($itName -match "(?i)(feeder|adf|alimentador)") {
+                            $item = $it
+                            Write-Host "  [WIA] Usando ítem específico de alimentador: '$itName'" -ForegroundColor DarkGray
+                            break
+                        }
+                    }
+                }
+                if (-not $item) {
+                    $item = $selectedDev.Items.Item(1)
+                }
+            }
+
+            if (-not $item) {
+                throw "El escáner WIA no tiene ningún canal de digitalización disponible."
+            }
 
             $pagesList = @()
             $hasMore = $true
             $pageIndex = 0
+            $firstError = $null
+
+            # GUIDs estándar de WIA Automation
             $jpegFormat = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}"
+            $bmpFormat  = "{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}"
+            $pngFormat  = "{B96B3CAF-0728-11D3-9D7B-0000F81EF32E}"
 
             while ($hasMore -and $pageIndex -lt 100) {
+                $img = $null
+                $iterError = $null
+
+                # 1. Intentar JPEG
                 try {
-                    $item = $selectedDev.Items.Item(1)
-                    $img = $null
+                    $img = $item.Transfer($jpegFormat)
+                } catch {
+                    $iterError = $_.Exception
+                }
+
+                # 2. Si falló JPEG, intentar BMP nativo (soportado por el 100% de controladores WIA de HP)
+                if (-not $img) {
                     try {
-                        $img = $item.Transfer($jpegFormat)
+                        $img = $item.Transfer($bmpFormat)
                     } catch {
-                        $img = $item.Transfer()
+                        $iterError = $_.Exception
+                    }
+                }
+
+                # 3. Si falló BMP, intentar PNG
+                if (-not $img) {
+                    try {
+                        $img = $item.Transfer($pngFormat)
+                    } catch {
+                        $iterError = $_.Exception
+                    }
+                }
+
+                if ($img) {
+                    $pageIndex++
+                    $ts = (Get-Date).ToString("yyyyMMdd_HHmmss")
+                    $rawExt = $img.FileExtension
+                    if (-not $rawExt) { $rawExt = "bmp" }
+
+                    $tempRaw = Join-Path $scansDir "temp_wia_${ts}_$pageIndex.$rawExt"
+                    $img.SaveFile($tempRaw)
+
+                    $fn = "hp_wia_${ts}_cara$pageIndex.jpg"
+                    $savePath = Join-Path $scansDir $fn
+
+                    if ($rawExt.ToLower() -eq "jpg" -or $rawExt.ToLower() -eq "jpeg") {
+                        Move-Item $tempRaw $savePath -Force
+                    } else {
+                        # Convertir BMP o PNG a JPEG mediante System.Drawing para optimizar peso y compatibilidad web
+                        try {
+                            $drawingImg = [System.Drawing.Image]::FromFile($tempRaw)
+                            $drawingImg.Save($savePath, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+                            $drawingImg.Dispose()
+                            Remove-Item $tempRaw -Force -ErrorAction SilentlyContinue
+                        } catch {
+                            Move-Item $tempRaw $savePath -Force
+                        }
                     }
 
-                    if ($img) {
-                        $pageIndex++
-                        $ts = (Get-Date).ToString("yyyyMMdd_HHmmss")
-                        $fn = "hp_wia_${ts}_cara$pageIndex.jpg"
-                        $savePath = Join-Path $scansDir $fn
-                        $img.SaveFile($savePath)
+                    $bytes = [System.IO.File]::ReadAllBytes($savePath)
+                    $b64 = [Convert]::ToBase64String($bytes)
+                    $pagesList += @{
+                        dataUrl = "data:image/jpeg;base64,$b64"
+                        type = "image"
+                        filename = $fn
+                    }
+                    Write-Host "  -> [WIA] Cara $pageIndex escaneada exitosamente ($([math]::Round($bytes.Length/1024)) KB)" -ForegroundColor Green
 
-                        $bytes = [System.IO.File]::ReadAllBytes($savePath)
-                        $b64 = [Convert]::ToBase64String($bytes)
-                        $pagesList += @{
-                            dataUrl = "data:image/jpeg;base64,$b64"
-                            type = "image"
-                            filename = $fn
-                        }
-                        Write-Host "  -> [WIA] Cara $pageIndex escaneada ($([math]::Round($bytes.Length/1024)) KB)" -ForegroundColor Green
-
-                        if ($reqSource -eq "Platen") {
-                            $hasMore = $false
-                        }
-                    } else {
+                    if ($reqSource -eq "Platen") {
                         $hasMore = $false
                     }
-                } catch {
-                    # 0x80210003 es WIA_ERROR_PAPER_EMPTY (ADF vacío, fin normal del trabajo)
+                } else {
+                    # Transferencia no devolvió imagen o lanzó error
+                    if ($pageIndex -eq 0) {
+                        $firstError = $iterError
+                        Write-Host "  [WIA Error en página 1]: $($iterError.Message)" -ForegroundColor Red
+                    } else {
+                        Write-Host "  [WIA] Fin de páginas en el alimentador (total caras recibidas: $pageIndex)" -ForegroundColor DarkCyan
+                    }
                     $hasMore = $false
                 }
             }
 
             if ($pagesList.Count -eq 0) {
-                throw "No se recibieron páginas del escáner WIA. Revisa que haya hojas en el alimentador superior (ADF) o en el cristal."
+                $detail = if ($firstError) { " Detalle técnico del controlador WIA: $($firstError.Message)" } else { "" }
+                throw "No se recibieron páginas del escáner WIA. Revisa que las hojas estén colocadas firmemente en el alimentador superior (ADF) o en el cristal.$detail"
             }
 
             Write-Host "[Tacala] Escaneo WIA completado con éxito. Total caras: $($pagesList.Count)" -ForegroundColor Green
@@ -423,6 +527,31 @@ while ($listener.IsListening) {
         # Variantes de ScanSettings para máxima compatibilidad con HP eSCL
         $variants = @()
         if ($isDuplex) {
+            # Variante 0: HP Adf Duplex PDF (Formato nativo de Single-Pass Duplex de HP eSCL)
+            $vPdf = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>$hPx</pwg:Height>
+      <pwg:Width>$wPx</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>Adf</pwg:InputSource>
+  <scan:InputSource>Adf</scan:InputSource>
+  <scan:ColorMode>$color</scan:ColorMode>
+  <scan:XResolution>$resDpi</scan:XResolution>
+  <scan:YResolution>$resDpi</scan:YResolution>
+  <pwg:DocumentFormat>application/pdf</pwg:DocumentFormat>
+  <scan:AdfOptions>
+    <scan:AdfOption>Duplex</scan:AdfOption>
+  </scan:AdfOptions>
+  <scan:Duplex>true</scan:Duplex>
+</scan:ScanSettings>
+"@
             # Variante 1: HP ADF Oficial (Adf + AdfOptions Duplex + Duplex true)
             $v1 = @"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -518,6 +647,7 @@ while ($listener.IsListening) {
 </scan:ScanSettings>
 "@
             $variants = @(
+                @{ name = "HP Adf Duplex PDF (Adf + Duplex + PDF)"; xml = $vPdf },
                 @{ name = "HP Adf Duplex (Adf + AdfOptions + Duplex)"; xml = $v1 },
                 @{ name = "HP Feeder Duplex (Feeder + AdfOptions + Duplex)"; xml = $v2 },
                 @{ name = "HP Adf Duplex (Adf + Duplex)"; xml = $v3 },
@@ -638,20 +768,31 @@ while ($listener.IsListening) {
                             $docRes.Close()
 
                             if ($imgBytes.Length -gt 0) {
-                                $b64 = [Convert]::ToBase64String($imgBytes)
-                                $dataUrl = "data:image/jpeg;base64,$b64"
+                                $isPdf = ($imgBytes.Length -ge 4 -and $imgBytes[0] -eq 0x25 -and $imgBytes[1] -eq 0x50 -and $imgBytes[2] -eq 0x44 -and $imgBytes[3] -eq 0x46)
                                 $timestamp = (Get-Date).ToString("yyyyMMdd_HHmmss")
-                                $filename = "hp4103_${timestamp}_cara$pageNum.jpg"
-                                
-                                # Guardar también en disco en la carpeta escaneos
-                                $savePath = Join-Path $scansDir $filename
-                                [System.IO.File]::WriteAllBytes($savePath, $imgBytes)
+                                $b64 = [Convert]::ToBase64String($imgBytes)
 
-                                $pagesList += @{ dataUrl = $dataUrl; type = "image"; filename = $filename }
-                                Write-Host "  -> Cara $pageNum escaneada y recibida ($([math]::Round($imgBytes.Length/1024)) KB)" -ForegroundColor Green
-                                $gotPage = $true
-                                $consecutive404 = 0
-                                break
+                                if ($isPdf) {
+                                    $filename = "hp4103_${timestamp}_duplex.pdf"
+                                    $savePath = Join-Path $scansDir $filename
+                                    [System.IO.File]::WriteAllBytes($savePath, $imgBytes)
+                                    $pagesList += @{ dataUrl = "data:application/pdf;base64,$b64"; type = "pdf"; filename = $filename }
+                                    Write-Host "  -> Documento PDF dúplex completo recibido ($([math]::Round($imgBytes.Length/1024)) KB)" -ForegroundColor Green
+                                    $gotPage = $true
+                                    $consecutive404 = 0
+                                    $actualSource = "Platen" # Concluir descarga, el PDF contiene ambas caras/todas las páginas
+                                    break
+                                } else {
+                                    $dataUrl = "data:image/jpeg;base64,$b64"
+                                    $filename = "hp4103_${timestamp}_cara$pageNum.jpg"
+                                    $savePath = Join-Path $scansDir $filename
+                                    [System.IO.File]::WriteAllBytes($savePath, $imgBytes)
+                                    $pagesList += @{ dataUrl = $dataUrl; type = "image"; filename = $filename }
+                                    Write-Host "  -> Cara $pageNum escaneada y recibida ($([math]::Round($imgBytes.Length/1024)) KB)" -ForegroundColor Green
+                                    $gotPage = $true
+                                    $consecutive404 = 0
+                                    break
+                                }
                             }
                         } else {
                             $docRes.Close()

@@ -718,6 +718,9 @@ if (typeof pdfjsLib !== 'undefined') {
       DOM.cardSourceAdf.classList.add('active');
       DOM.cardSourcePlaten.classList.remove('active');
       DOM.cardSourceAdf.querySelector('input').checked = true;
+      if (scanDuplexMode === 'single') {
+        setDuplexMode('auto');
+      }
     });
 
     DOM.cardSourcePlaten.addEventListener('click', () => {
@@ -842,7 +845,7 @@ if (typeof pdfjsLib !== 'undefined') {
       DOM.hpDuplexCheck.checked = false;
     } else {
       DOM.btnDuplexNo.classList.add('active');
-      DOM.duplexStateBadge.textContent = '1 Cara';
+      DOM.duplexStateBadge.textContent = '1 Sola Cara';
       DOM.duplexStateBadge.classList.remove('active');
       DOM.hpDuplexCheck.checked = false;
     }
@@ -1190,41 +1193,103 @@ if (typeof pdfjsLib !== 'undefined') {
 
   async function addScannedPages(pages) {
     for (const pageData of pages) {
-      try {
-        const img = new Image();
-        img.src = pageData.dataUrl;
-        await img.decode();
+      if (pageData.type === 'pdf' || (pageData.dataUrl && pageData.dataUrl.startsWith('data:application/pdf'))) {
+        try {
+          const base64Str = pageData.dataUrl.split(',')[1];
+          const binStr = atob(base64Str);
+          const len = binStr.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            bytes[i] = binStr.charCodeAt(i);
+          }
 
-        let targetWidth = A4_PORTRAIT.width;
-        let targetHeight = (img.height / img.width) * targetWidth;
+          const docId = 'doc_' + Math.random().toString(36).substring(2, 9);
+          const pdfLibBytes = new Uint8Array(bytes.buffer.slice(0));
 
-        const canvas = document.createElement('canvas');
-        canvas.width = targetWidth * 2;
-        canvas.height = targetHeight * 2;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const loadingTask = pdfjsLib.getDocument({ data: bytes });
+          const pdfJsDoc = await loadingTask.promise;
 
-        const pageCanvasUrl = canvas.toDataURL('image/jpeg', 0.9);
+          state.sourceDocuments.set(docId, {
+            name: pageData.filename || 'Escaneo HP Doble Cara',
+            bytes: pdfLibBytes,
+            pdfJsDoc: pdfJsDoc
+          });
 
-        const pageObj = {
-          id: 'page_' + Math.random().toString(36).substring(2, 9),
-          type: 'image',
-          sourceDocId: null,
-          sourcePageIndex: null,
-          width: targetWidth,
-          height: targetHeight,
-          rotation: 0,
-          thumbnailUrl: pageCanvasUrl,
-          canvasDataUrl: pageCanvasUrl,
-          isEdited: true,
-          originalName: pageData.filename || 'Escaneo HP 4103'
-        };
+          const numPages = pdfJsDoc.numPages;
+          for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+            const pdfPage = await pdfJsDoc.getPage(pageNum);
+            const viewport = pdfPage.getViewport({ scale: 1.0 });
 
-        state.pages.push(pageObj);
-      } catch (e) {
-        console.error('Error adding scanned page:', e);
+            const thumbScale = 1.0;
+            const thumbViewport = pdfPage.getViewport({ scale: thumbScale });
+            const thumbCanvas = document.createElement('canvas');
+            thumbCanvas.width = thumbViewport.width;
+            thumbCanvas.height = thumbViewport.height;
+            const thumbCtx = thumbCanvas.getContext('2d');
+
+            await pdfPage.render({
+              canvasContext: thumbCtx,
+              viewport: thumbViewport
+            }).promise;
+
+            const pageObj = {
+              id: 'page_' + Math.random().toString(36).substring(2, 9),
+              type: 'pdf-page',
+              sourceDocId: docId,
+              sourcePageIndex: pageNum - 1,
+              width: viewport.width,
+              height: viewport.height,
+              rotation: 0,
+              thumbnailUrl: thumbCanvas.toDataURL('image/jpeg', 0.88),
+              canvasDataUrl: null,
+              isEdited: false,
+              originalName: `${pageData.filename || 'HP 4103'} (Cara ${pageNum})`
+            };
+
+            state.pages.push(pageObj);
+          }
+          showToast(`Se importaron ${numPages} caras desde el escaneo dúplex`, 'success', 3500);
+        } catch (err) {
+          console.error('Error desempaquetando PDF escaneado:', err);
+          showToast(`Error al procesar PDF de escáner: ${err.message}`, 'danger');
+        }
+      } else {
+        try {
+          const img = new Image();
+          img.src = pageData.dataUrl;
+          await img.decode();
+
+          let targetWidth = A4_PORTRAIT.width;
+          let targetHeight = (img.height / img.width) * targetWidth;
+
+          const canvas = document.createElement('canvas');
+          canvas.width = targetWidth * 2;
+          canvas.height = targetHeight * 2;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+          const pageCanvasUrl = canvas.toDataURL('image/jpeg', 0.9);
+
+          const pageObj = {
+            id: 'page_' + Math.random().toString(36).substring(2, 9),
+            type: 'image',
+            sourceDocId: null,
+            sourcePageIndex: null,
+            width: targetWidth,
+            height: targetHeight,
+            rotation: 0,
+            thumbnailUrl: pageCanvasUrl,
+            canvasDataUrl: pageCanvasUrl,
+            isEdited: true,
+            originalName: pageData.filename || 'Escaneo HP 4103'
+          };
+
+          state.pages.push(pageObj);
+        } catch (e) {
+          console.error('Error adding scanned page:', e);
+        }
       }
     }
 
