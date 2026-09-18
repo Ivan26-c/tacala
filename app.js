@@ -91,15 +91,23 @@ if (typeof pdfjsLib !== 'undefined') {
     hpScanModal: document.getElementById('hpScanModal'),
     btnCloseHpModal: document.getElementById('btnCloseHpModal'),
     btnCancelHpScan: document.getElementById('btnCancelHpScan'),
+    tabEngineWia: document.getElementById('tabEngineWia'),
+    tabEngineNetwork: document.getElementById('tabEngineNetwork'),
+    wiaDeviceSection: document.getElementById('wiaDeviceSection'),
+    wiaDeviceSelect: document.getElementById('wiaDeviceSelect'),
+    btnRefreshWia: document.getElementById('btnRefreshWia'),
+    wiaStatusHint: document.getElementById('wiaStatusHint'),
     cardSourceAdf: document.getElementById('cardSourceAdf'),
     cardSourcePlaten: document.getElementById('cardSourcePlaten'),
     btnDuplexNo: document.getElementById('btnDuplexNo'),
     btnDuplexYes: document.getElementById('btnDuplexYes'),
+    btnDuplexAssisted: document.getElementById('btnDuplexAssisted'),
     hpDuplexCheck: document.getElementById('hpDuplexCheck'),
     duplexStateBadge: document.getElementById('duplexStateBadge'),
     hpScanProgressBox: document.getElementById('hpScanProgressBox'),
     hpScanProgressTitle: document.getElementById('hpScanProgressTitle'),
     hpScanProgressSubtitle: document.getElementById('hpScanProgressSubtitle'),
+    networkConfigAccordion: document.getElementById('networkConfigAccordion'),
     btnToggleIpConfig: document.getElementById('btnToggleIpConfig'),
     ipEditDrawer: document.getElementById('ipEditDrawer'),
     displayCurrentIpText: document.getElementById('displayCurrentIpText'),
@@ -112,6 +120,8 @@ if (typeof pdfjsLib !== 'undefined') {
     diagnosisPanel: document.getElementById('diagnosisPanel'),
     diagnosisContent: document.getElementById('diagnosisContent'),
     btnCloseDiagnosis: document.getElementById('btnCloseDiagnosis'),
+    btnToggleRawXml: document.getElementById('btnToggleRawXml'),
+    rawXmlContainer: document.getElementById('rawXmlContainer'),
 
     // Deskew Modal
     deskewModal: document.getElementById('deskewModal'),
@@ -682,8 +692,13 @@ if (typeof pdfjsLib !== 'undefined') {
   }
 
   // ==========================================================================
-  // HP Scanner Modal (Ultra Simple & Clean)
+  // HP Scanner Modal (Modo Windows WIA Oficial + Red Directa + Dúplex Asistido)
   // ==========================================================================
+  let scanEngine = 'wia'; // 'wia' (Motor oficial HP Smart) | 'network' (eSCL Directo)
+  let scanDuplexMode = 'single'; // 'single' | 'auto' | 'assisted'
+  let assistedStep = 1;
+  let assistedFrontPages = [];
+
   function setupHpScanner() {
     // Open/Close triggers
     DOM.btnOpenHpScan.addEventListener('click', openHpScanModal);
@@ -691,7 +706,14 @@ if (typeof pdfjsLib !== 'undefined') {
     DOM.btnCloseHpModal.addEventListener('click', closeHpScanModal);
     DOM.btnCancelHpScan.addEventListener('click', closeHpScanModal);
 
-    // Source selection: ADF vs Cristal
+    // Selector de motor de escaneo (Pestañas)
+    DOM.tabEngineWia.addEventListener('click', () => setScanEngine('wia'));
+    DOM.tabEngineNetwork.addEventListener('click', () => setScanEngine('network'));
+
+    // Botón refrescar dispositivos WIA
+    DOM.btnRefreshWia.addEventListener('click', loadWiaDevices);
+
+    // Origen de hojas: ADF vs Cristal
     DOM.cardSourceAdf.addEventListener('click', () => {
       DOM.cardSourceAdf.classList.add('active');
       DOM.cardSourcePlaten.classList.remove('active');
@@ -703,33 +725,31 @@ if (typeof pdfjsLib !== 'undefined') {
       DOM.cardSourceAdf.classList.remove('active');
       DOM.cardSourcePlaten.querySelector('input').checked = true;
       
-      // Platen cannot do duplex physically
-      if (DOM.hpDuplexCheck.checked) {
-        setDuplexState(false);
+      if (scanDuplexMode !== 'single') {
+        setDuplexMode('single');
         showToast('El cristal solo escanea 1 cara a la vez', 'info', 2500);
       }
     });
 
-    // Duplex selector (1 cara vs 2 caras)
-    DOM.btnDuplexNo.addEventListener('click', () => setDuplexState(false));
+    // Selector de Doble Cara (1 cara, 2 caras Auto ADF, Dúplex Asistido)
+    DOM.btnDuplexNo.addEventListener('click', () => setDuplexMode('single'));
     DOM.btnDuplexYes.addEventListener('click', () => {
-      // If currently Platen, switch to Feeder automatically
       if (DOM.cardSourcePlaten.classList.contains('active')) {
         DOM.cardSourceAdf.click();
       }
-      setDuplexState(true);
+      setDuplexMode('auto');
+    });
+    DOM.btnDuplexAssisted.addEventListener('click', () => {
+      setDuplexMode('assisted');
+      showToast('Dúplex Asistido: Escanea frentes, luego reversos y Tacala las ordena', 'info', 3500);
     });
 
-    // Restore saved duplex preference
-    const savedDuplex = localStorage.getItem('tacala_hp_duplex') === 'true';
-    setDuplexState(savedDuplex);
-
-    // IP Accordion Drawer
+    // IP Accordion Drawer (Modo Red)
     DOM.btnToggleIpConfig.addEventListener('click', () => {
       DOM.ipEditDrawer.classList.toggle('hidden');
     });
 
-    // Restore saved IP
+    // Restaurar IP guardada
     const savedIp = localStorage.getItem('tacala_hp_printer_ip') || '192.168.1.50';
     DOM.hpPrinterIp.value = savedIp;
     DOM.displayCurrentIpText.textContent = `Impresora en red: ${savedIp}`;
@@ -739,43 +759,108 @@ if (typeof pdfjsLib !== 'undefined') {
       DOM.displayCurrentIpText.textContent = `Impresora en red: ${val || 'Sin IP'}`;
     });
 
-    // Test connection
+    // Probar conexión por red
     DOM.btnTestHpConnection.addEventListener('click', testHpConnection);
 
-    // Start network scan
-    DOM.btnStartHpScan.addEventListener('click', startHpNetworkScan);
+    // Iniciar escaneo
+    DOM.btnStartHpScan.addEventListener('click', handleStartScan);
 
-    // Diagnose duplex capabilities
+    // Diagnosticar doble cara
     DOM.btnDiagnose.addEventListener('click', runDuplexDiagnosis);
     DOM.btnCloseDiagnosis.addEventListener('click', () => {
       DOM.diagnosisPanel.classList.add('hidden');
     });
+
+    // Toggle XML crudo
+    DOM.btnToggleRawXml.addEventListener('click', () => {
+      DOM.rawXmlContainer.classList.toggle('hidden');
+    });
+
+    // Inicializar estado del motor y dispositivos
+    setScanEngine('wia');
+    setDuplexMode('single');
   }
 
-  function setDuplexState(isDuplex) {
-    DOM.hpDuplexCheck.checked = isDuplex;
-    localStorage.setItem('tacala_hp_duplex', isDuplex ? 'true' : 'false');
+  function setScanEngine(engine) {
+    scanEngine = engine;
+    if (engine === 'wia') {
+      DOM.tabEngineWia.classList.add('active');
+      DOM.tabEngineNetwork.classList.remove('active');
+      DOM.wiaDeviceSection.classList.remove('hidden');
+      DOM.networkConfigAccordion.classList.add('hidden');
+      loadWiaDevices();
+    } else {
+      DOM.tabEngineNetwork.classList.add('active');
+      DOM.tabEngineWia.classList.remove('active');
+      DOM.wiaDeviceSection.classList.add('hidden');
+      DOM.networkConfigAccordion.classList.remove('hidden');
+    }
+  }
 
-    if (isDuplex) {
+  async function loadWiaDevices() {
+    DOM.wiaDeviceSelect.innerHTML = '<option value="">Detectando escáneres en Windows...</option>';
+    DOM.wiaStatusHint.innerHTML = '<i class="fa-solid fa-spinner fa-spin" style="color:#38bdf8;"></i> <span>Consultando Windows...</span>';
+
+    try {
+      const res = await fetch('/api/scanner/wia-devices');
+      const data = await res.json();
+
+      if (data.success && data.devices && data.devices.length > 0) {
+        DOM.wiaDeviceSelect.innerHTML = '';
+        data.devices.forEach((d) => {
+          const opt = document.createElement('option');
+          opt.value = d.id;
+          opt.textContent = `${d.name} (Controlador Oficial)`;
+          DOM.wiaDeviceSelect.appendChild(opt);
+        });
+        DOM.wiaStatusHint.innerHTML = `<i class="fa-solid fa-circle-check" style="color:#22c55e;"></i> <span>Conectado a ${escapeHtml(data.devices[0].name)}. Listo para escanear.</span>`;
+      } else {
+        DOM.wiaDeviceSelect.innerHTML = '<option value="">No se detectaron escáneres locales WIA</option>';
+        DOM.wiaStatusHint.innerHTML = '<i class="fa-solid fa-triangle-exclamation" style="color:#f59e0b;"></i> <span>No hay escáneres WIA USB/locales detectados. Puedes usar la pestaña "Red HP Directa".</span>';
+      }
+    } catch (e) {
+      DOM.wiaDeviceSelect.innerHTML = '<option value="">Error al consultar Windows</option>';
+      DOM.wiaStatusHint.innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color:#ef4444;"></i> <span>${escapeHtml(e.message)}</span>`;
+    }
+  }
+
+  function setDuplexMode(mode) {
+    scanDuplexMode = mode;
+    DOM.btnDuplexNo.classList.remove('active');
+    DOM.btnDuplexYes.classList.remove('active');
+    DOM.btnDuplexAssisted.classList.remove('active');
+
+    if (mode === 'auto') {
       DOM.btnDuplexYes.classList.add('active');
-      DOM.btnDuplexNo.classList.remove('active');
-      DOM.duplexStateBadge.textContent = '2 Caras (Ambos lados)';
+      DOM.duplexStateBadge.textContent = '2 Caras (Auto ADF)';
       DOM.duplexStateBadge.classList.add('active');
+      DOM.hpDuplexCheck.checked = true;
+    } else if (mode === 'assisted') {
+      DOM.btnDuplexAssisted.classList.add('active');
+      DOM.duplexStateBadge.textContent = '2 Caras (Asistido)';
+      DOM.duplexStateBadge.classList.add('active');
+      DOM.hpDuplexCheck.checked = false;
     } else {
       DOM.btnDuplexNo.classList.add('active');
-      DOM.btnDuplexYes.classList.remove('active');
       DOM.duplexStateBadge.textContent = '1 Cara';
       DOM.duplexStateBadge.classList.remove('active');
+      DOM.hpDuplexCheck.checked = false;
     }
   }
 
   function openHpScanModal() {
     DOM.hpScanModal.classList.remove('hidden');
+    if (scanEngine === 'wia') {
+      loadWiaDevices();
+    }
   }
 
   function closeHpScanModal() {
     DOM.hpScanModal.classList.add('hidden');
     DOM.hpScanProgressBox.classList.add('hidden');
+    assistedStep = 1;
+    assistedFrontPages = [];
+    DOM.btnStartHpScan.querySelector('span').textContent = 'Escanear Ahora';
   }
 
   async function testHpConnection() {
@@ -830,6 +915,8 @@ if (typeof pdfjsLib !== 'undefined') {
     DOM.btnDiagnose.disabled = true;
     DOM.btnDiagnose.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Diagnosticando...';
     DOM.diagnosisPanel.classList.add('hidden');
+    DOM.btnToggleRawXml.style.display = 'none';
+    DOM.rawXmlContainer.classList.add('hidden');
 
     try {
       const res = await fetch('/api/scanner/diagnose', {
@@ -856,81 +943,52 @@ if (typeof pdfjsLib !== 'undefined') {
 
       let html = '';
 
-      // Model Header
+      // Header
       html += `<div style="display:flex;align-items:center;gap:0.5rem;font-weight:700;color:#f8fafc;margin-bottom:0.75rem;">
         <i class="fa-solid fa-print" style="color:#38bdf8;"></i>
         <span>${escapeHtml(modelName)}</span>
       </div>`;
 
-      // ADF Sensor State Alert
+      // Sensor ADF
       if (adfState === 'ScannerAdfLoaded') {
         html += `<div class="diag-alert diag-alert-success">
           <i class="fa-solid fa-circle-check"></i>
-          <div><strong>Hojas detectadas en ADF:</strong> El sensor del alimentador superior detecta papel. Listo para escanear a doble cara.</div>
+          <div><strong>Hojas detectadas en ADF:</strong> El sensor superior detecta papel. Listo para escanear.</div>
         </div>`;
       } else if (adfState === 'ScannerAdfEmpty') {
         html += `<div class="diag-alert diag-alert-warning">
           <i class="fa-solid fa-triangle-exclamation"></i>
-          <div><strong>Bandeja ADF vacía:</strong> No se detectan hojas en el alimentador superior. Para escanear a doble cara, coloca las hojas en la bandeja superior (no en el cristal) hasta que el sensor las detecte.</div>
-        </div>`;
-      } else if (adfState.includes('DoorOpen')) {
-        html += `<div class="diag-alert diag-alert-danger">
-          <i class="fa-solid fa-door-open"></i>
-          <div><strong>Tapa del ADF abierta:</strong> Cierra bien la cubierta del alimentador.</div>
+          <div><strong>Bandeja ADF vacía:</strong> Coloca las hojas en la bandeja superior hasta que la impresora haga un sonidito o detecte el papel.</div>
         </div>`;
       }
 
-      // Duplex Support Alert
-      if (ds.hasDuplexTag || d.summary.canDoDuplex) {
-        html += `<div class="diag-alert diag-alert-success">
-          <i class="fa-solid fa-circle-check"></i>
-          <div><strong>Doble Cara Compatible:</strong> Tu impresora HP utiliza la directiva oficial nativa <code>&lt;scan:Duplex&gt;true&lt;/scan:Duplex&gt;</code>. Tacala la configurará automáticamente.</div>
-        </div>`;
-      } else {
-        html += `<div class="diag-alert diag-alert-warning">
-          <i class="fa-solid fa-circle-question"></i>
-          <div><strong>Soporte Dúplex no confirmado:</strong> El escáner no reportó tags de dúplex estándar.</div>
-        </div>`;
-      }
+      // Duplex Status
+      html += `<div class="diag-alert diag-alert-info">
+        <i class="fa-solid fa-circle-info"></i>
+        <div><strong>Doble Cara Disponible:</strong> Puedes usar el <strong>Modo Windows WIA (HP Smart)</strong> para escanear directamente con el controlador oficial de HP en tu PC, o <strong>Red eSCL</strong> con el protocolo optimizado.</div>
+      </div>`;
 
-      // Technical Details
-      html += '<div class="diag-section-title">📋 Especificaciones eSCL Dúplex</div>';
-      html += `<div class="diag-row"><span class="diag-label">Opción ADF Duplex (Oficial HP)</span>${yesNo(ds.hasAdfOption || ds.hasAdfOptions || ds.hasDuplexTag)}</div>`;
-      html += `<div class="diag-row"><span class="diag-label">Directiva "scan:Duplex"</span>${yesNo(ds.hasDuplexTag)}</div>`;
-      html += `<div class="diag-row"><span class="diag-label">Capacidades ADF Duplex</span>${yesNo(ds.hasAdfDuplexCaps || ds.hasAdfOption)}</div>`;
-      html += `<div class="diag-row"><span class="diag-label">Modo Multi-Variante Auto-Recuperación</span><span class="diag-badge-yes"><i class="fa-solid fa-check"></i> Activo (4 variantes)</span></div>`;
-
-      html += '<div class="diag-section-title">🖨️ Bandejas de Entrada</div>';
+      // Detalles técnicos
+      html += '<div class="diag-section-title">📋 Especificaciones eSCL Duplex</div>';
+      html += `<div class="diag-row"><span class="diag-label">Tag "Duplex"</span>${yesNo(ds.hasDuplexTag)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Tag "DuplexMode"</span>${yesNo(ds.hasDuplexMode)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Tag "TwoSided"</span>${yesNo(ds.hasTwoSided)}</div>`;
+      html += `<div class="diag-row"><span class="diag-label">Tag "AdfOptions / Duplex"</span>${yesNo(ds.hasAdfOption || ds.hasAdfOptions)}</div>`;
       html += `<div class="diag-row"><span class="diag-label">Alimentador ADF</span>${yesNo(adf.hasAdf)}</div>`;
-      html += `<div class="diag-row"><span class="diag-label">Cristal (Platen)</span>${yesNo(adf.hasPlaten)}</div>`;
 
-      if (adf.inputSources && adf.inputSources.length > 0) {
-        html += '<div class="diag-section-title">📡 Fuentes de Entrada (InputSource)</div>';
-        adf.inputSources.forEach(s => {
-          html += `<div style="font-family:monospace;font-size:0.75rem;color:#94a3b8;">${escapeHtml(s)}</div>`;
-        });
-      }
-
-      // Raw duplex lines from XML
-      if (ds.rawDuplexLines && ds.rawDuplexLines.length > 0) {
-        html += '<div class="diag-section-title">🔍 Líneas XML Duplex en tu HP</div>';
-        html += '<pre>';
-        ds.rawDuplexLines.forEach(l => {
-          html += `L${l.line}: ${escapeHtml(l.content)}\n`;
-        });
-        html += '</pre>';
-      }
-
-      const fullXml = d.rawXml || d.rawCapabilitiesXml;
-      if (fullXml) {
-        html += '<div style="margin-top:10px;">';
-        html += '<details><summary style="cursor:pointer;color:#38bdf8;font-size:0.8rem;"><i class="fa-solid fa-code"></i> Ver XML Completo de la Impresora (ScannerCapabilities)</summary>';
-        html += `<textarea readonly style="width:100%;height:180px;background:#0f172a;color:#94a3b8;font-family:monospace;font-size:0.7rem;padding:8px;border-radius:6px;border:1px solid #334155;margin-top:6px;">${escapeHtml(fullXml)}</textarea>`;
-        html += '</details>';
-        html += '</div>';
+      if (d.savedXmlPath) {
+        html += `<div style="font-size:0.75rem;color:#38bdf8;margin-top:0.4rem;"><i class="fa-solid fa-file-code"></i> Archivo XML guardado en disco: <code>${escapeHtml(d.savedXmlPath)}</code></div>`;
       }
 
       DOM.diagnosisContent.innerHTML = html;
+
+      // Raw XML handling
+      const rawXml = d.rawXml || d.rawCapabilitiesXml;
+      if (rawXml) {
+        DOM.rawXmlContainer.textContent = rawXml;
+        DOM.btnToggleRawXml.style.display = 'block';
+      }
+
       DOM.diagnosisPanel.classList.remove('hidden');
       showToast('Diagnóstico completado', 'success');
 
@@ -942,6 +1000,52 @@ if (typeof pdfjsLib !== 'undefined') {
     }
   }
 
+  // Despachador principal de escaneo
+  async function handleStartScan() {
+    if (scanDuplexMode === 'assisted') {
+      await handleAssistedDuplexScan();
+    } else if (scanEngine === 'wia') {
+      await startWiaScan();
+    } else {
+      await startHpNetworkScan();
+    }
+  }
+
+  // Escaneo nativo Windows WIA (Motor de HP Smart)
+  async function startWiaScan() {
+    const isDuplex = scanDuplexMode === 'auto';
+    const source = (DOM.cardSourcePlaten.classList.contains('active') && !isDuplex) ? 'Platen' : 'Feeder';
+    const deviceId = DOM.wiaDeviceSelect.value;
+
+    DOM.hpScanProgressBox.classList.remove('hidden');
+    DOM.hpScanProgressTitle.textContent = `Escaneando con Windows WIA...`;
+    DOM.hpScanProgressSubtitle.textContent = `El controlador oficial de HP está procesando las hojas ${isDuplex ? '(Doble cara)' : '(1 cara)'}.`;
+    DOM.btnStartHpScan.disabled = true;
+
+    try {
+      const res = await fetch('/api/scanner/wia-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ duplex: isDuplex, source, deviceId })
+      });
+      const data = await res.json();
+
+      if (data.success && data.pages && data.pages.length > 0) {
+        await addScannedPages(data.pages);
+        closeHpScanModal();
+        showToast(`¡Escaneo WIA exitoso! Se agregaron ${data.pages.length} hoja(s).`, 'success', 4500);
+      } else {
+        showToast(`Error WIA: ${data.error || 'No se recibieron páginas'}`, 'danger', 5000);
+      }
+    } catch (err) {
+      showToast(`Error al escanear con WIA: ${err.message}`, 'danger', 5000);
+    } finally {
+      DOM.btnStartHpScan.disabled = false;
+      DOM.hpScanProgressBox.classList.add('hidden');
+    }
+  }
+
+  // Escaneo por Red HP Directa (eSCL)
   async function startHpNetworkScan() {
     const ip = DOM.hpPrinterIp.value.trim();
     if (!ip) {
@@ -951,34 +1055,33 @@ if (typeof pdfjsLib !== 'undefined') {
 
     localStorage.setItem('tacala_hp_printer_ip', ip);
 
-    const isDuplexRequested = DOM.hpDuplexCheck.checked;
-    // Si se pide doble cara, obligatoriamente se usa Feeder/ADF
-    let source = DOM.cardSourceAdf.classList.contains('active') ? 'Feeder' : 'Platen';
-    if (isDuplexRequested) {
-      source = 'Feeder';
-    }
-    const duplex = isDuplexRequested;
+    const isDuplex = scanDuplexMode === 'auto';
+    const source = (DOM.cardSourcePlaten.classList.contains('active') && !isDuplex) ? 'Platen' : 'Adf';
     const colorMode = 'RGB24';
     const resolution = 300;
 
-    // Show laser progress box
     DOM.hpScanProgressBox.classList.remove('hidden');
-    DOM.hpScanProgressTitle.textContent = `Escaneando desde ${source === 'Feeder' ? 'Alimentador ADF' : 'Cristal'}...`;
-    DOM.hpScanProgressSubtitle.textContent = `La HP está procesando las hojas ${duplex ? '(Doble cara - ambos lados)' : '(1 cara)'}. Espera unos segundos...`;
+    DOM.hpScanProgressTitle.textContent = `Escaneando por Red en ${ip}...`;
+    DOM.hpScanProgressSubtitle.textContent = `La HP está procesando las hojas ${isDuplex ? '(Doble cara)' : '(1 cara)'}. Espera unos segundos...`;
     DOM.btnStartHpScan.disabled = true;
 
     try {
       const res = await fetch('/api/scanner/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip, source, colorMode, resolution, duplex })
+        body: JSON.stringify({ ip, source, colorMode, resolution, duplex: isDuplex })
       });
       const data = await res.json();
 
       if (data.success && data.pages && data.pages.length > 0) {
         await addScannedPages(data.pages);
         closeHpScanModal();
-        showToast(`¡Se agregaron ${data.pages.length} hoja(s) escaneada(s)!`, 'success', 4500);
+        
+        if (data.duplexWarning) {
+          showToast(data.duplexWarning, 'warning', 7000);
+        } else {
+          showToast(`¡Se agregaron ${data.pages.length} hoja(s) escaneada(s)!`, 'success', 4500);
+        }
       } else {
         showToast(`Error de escaneo: ${data.error || 'No se obtuvieron páginas'}`, 'danger', 5000);
       }
@@ -987,6 +1090,101 @@ if (typeof pdfjsLib !== 'undefined') {
     } finally {
       DOM.btnStartHpScan.disabled = false;
       DOM.hpScanProgressBox.classList.add('hidden');
+    }
+  }
+
+  // Dúplex Asistido: Escanea frentes, luego reversos y los intercala inteligentemente
+  async function handleAssistedDuplexScan() {
+    const source = 'Feeder';
+    const deviceId = DOM.wiaDeviceSelect.value;
+    const ip = DOM.hpPrinterIp.value.trim();
+
+    DOM.hpScanProgressBox.classList.remove('hidden');
+    DOM.btnStartHpScan.disabled = true;
+
+    if (assistedStep === 1) {
+      DOM.hpScanProgressTitle.textContent = 'Paso 1: Escaneando caras frontales (1, 3, 5...)...';
+      DOM.hpScanProgressSubtitle.textContent = 'Procesando el anverso de tus hojas.';
+
+      try {
+        let pages = [];
+        if (scanEngine === 'wia') {
+          const res = await fetch('/api/scanner/wia-scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ duplex: false, source, deviceId })
+          });
+          const d = await res.json();
+          if (!d.success) throw new Error(d.error);
+          pages = d.pages;
+        } else {
+          const res = await fetch('/api/scanner/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip, source: 'Adf', colorMode: 'RGB24', resolution: 300, duplex: false })
+          });
+          const d = await res.json();
+          if (!d.success) throw new Error(d.error);
+          pages = d.pages;
+        }
+
+        assistedFrontPages = pages;
+        assistedStep = 2;
+        DOM.hpScanProgressBox.classList.add('hidden');
+        DOM.btnStartHpScan.disabled = false;
+        DOM.btnStartHpScan.querySelector('span').textContent = 'Escanear Reversos (Paso 2)';
+
+        showToast(`¡${pages.length} caras frontales listas! Ahora dale vuelta a la pila de hojas en el alimentador y pulsa 'Escanear Reversos'`, 'info', 8000);
+      } catch (err) {
+        showToast(`Error al escanear frentes: ${err.message}`, 'danger');
+        DOM.btnStartHpScan.disabled = false;
+        DOM.hpScanProgressBox.classList.add('hidden');
+      }
+    } else {
+      // Paso 2: Escanear reversos
+      DOM.hpScanProgressTitle.textContent = 'Paso 2: Escaneando caras traseras (reversos)...';
+      DOM.hpScanProgressSubtitle.textContent = 'Procesando el reverso e intercalando en orden.';
+
+      try {
+        let backPages = [];
+        if (scanEngine === 'wia') {
+          const res = await fetch('/api/scanner/wia-scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ duplex: false, source, deviceId })
+          });
+          const d = await res.json();
+          if (!d.success) throw new Error(d.error);
+          backPages = d.pages;
+        } else {
+          const res = await fetch('/api/scanner/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip, source: 'Adf', colorMode: 'RGB24', resolution: 300, duplex: false })
+          });
+          const d = await res.json();
+          if (!d.success) throw new Error(d.error);
+          backPages = d.pages;
+        }
+
+        // Intercalar frentes y reversos
+        // En ADF estándar al voltear la pila, la última hoja entra primero: reversar si corresponde o intercalar directamente
+        const interleaved = [];
+        const maxLen = Math.max(assistedFrontPages.length, backPages.length);
+        for (let i = 0; i < maxLen; i++) {
+          if (i < assistedFrontPages.length) interleaved.push(assistedFrontPages[i]);
+          if (i < backPages.length) interleaved.push(backPages[i]);
+        }
+
+        await addScannedPages(interleaved);
+        closeHpScanModal();
+        showToast(`¡Dúplex asistido completado! Se intercalaron ${interleaved.length} caras en orden perfecto.`, 'success', 5000);
+      } catch (err) {
+        showToast(`Error al escanear reversos: ${err.message}`, 'danger');
+      } finally {
+        DOM.btnStartHpScan.disabled = false;
+        DOM.hpScanProgressBox.classList.add('hidden');
+      }
     }
   }
 

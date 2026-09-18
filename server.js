@@ -3,7 +3,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const url = require('url');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 
 const PORT = 3000;
 const SCANS_DIR = path.join(__dirname, 'escaneos');
@@ -130,11 +130,11 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   const cleanIp = ip.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   const isHttps = protocol === 'https' || port === 443;
   const isDuplex = Boolean(duplex);
-  // For HP eSCL, ADF feeder source is 'Feeder'
-  const actualSource = (source === 'Platen' && !isDuplex) ? 'Platen' : 'Feeder';
+  // Para HP eSCL, el alimentador dúplex se identifica como 'Adf'
+  const actualSource = (source === 'Platen' && !isDuplex) ? 'Platen' : 'Adf';
 
   // Check if ADF is empty before attempting scan
-  if (actualSource === 'Feeder') {
+  if (actualSource === 'Adf' || actualSource === 'Feeder') {
     try {
       const statusRes = await httpRequest({
         protocol: isHttps ? 'https:' : 'http:',
@@ -168,7 +168,7 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   const variants = [];
   if (isDuplex) {
     variants.push({
-      name: 'HP Duplex Completo (AdfOptions + DuplexMode + Duplex)',
+      name: 'HP Adf Duplex (Adf + AdfOptions + Duplex)',
       xml: `<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
   <pwg:Version>2.0</pwg:Version>
@@ -180,35 +180,8 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <pwg:InputSource>${actualSource}</pwg:InputSource>
-  <scan:InputSource>${actualSource}</scan:InputSource>
-  <scan:ColorMode>${normalizedColor}</scan:ColorMode>
-  <scan:XResolution>${resolution}</scan:XResolution>
-  <scan:YResolution>${resolution}</scan:YResolution>
-  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
-  <scan:AdfOptions>
-    <scan:AdfOption>Duplex</scan:AdfOption>
-  </scan:AdfOptions>
-  <scan:DuplexMode>TwoSided</scan:DuplexMode>
-  <scan:Duplex>true</scan:Duplex>
-</scan:ScanSettings>`
-    });
-
-    variants.push({
-      name: 'HP Duplex (AdfOptions + Duplex booleano)',
-      xml: `<?xml version="1.0" encoding="UTF-8"?>
-<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
-  <pwg:Version>2.0</pwg:Version>
-  <pwg:ScanRegions>
-    <pwg:ScanRegion>
-      <pwg:Height>${heightPx}</pwg:Height>
-      <pwg:Width>${widthPx}</pwg:Width>
-      <pwg:XOffset>0</pwg:XOffset>
-      <pwg:YOffset>0</pwg:YOffset>
-    </pwg:ScanRegion>
-  </pwg:ScanRegions>
-  <pwg:InputSource>${actualSource}</pwg:InputSource>
-  <scan:InputSource>${actualSource}</scan:InputSource>
+  <pwg:InputSource>Adf</pwg:InputSource>
+  <scan:InputSource>Adf</scan:InputSource>
   <scan:ColorMode>${normalizedColor}</scan:ColorMode>
   <scan:XResolution>${resolution}</scan:XResolution>
   <scan:YResolution>${resolution}</scan:YResolution>
@@ -221,7 +194,7 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
     });
 
     variants.push({
-      name: 'HP Duplex (AdfOptions)',
+      name: 'HP Feeder Duplex (Feeder + AdfOptions + Duplex)',
       xml: `<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
   <pwg:Version>2.0</pwg:Version>
@@ -233,8 +206,8 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <pwg:InputSource>${actualSource}</pwg:InputSource>
-  <scan:InputSource>${actualSource}</scan:InputSource>
+  <pwg:InputSource>Feeder</pwg:InputSource>
+  <scan:InputSource>Feeder</scan:InputSource>
   <scan:ColorMode>${normalizedColor}</scan:ColorMode>
   <scan:XResolution>${resolution}</scan:XResolution>
   <scan:YResolution>${resolution}</scan:YResolution>
@@ -242,11 +215,12 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
   <scan:AdfOptions>
     <scan:AdfOption>Duplex</scan:AdfOption>
   </scan:AdfOptions>
+  <scan:Duplex>true</scan:Duplex>
 </scan:ScanSettings>`
     });
 
     variants.push({
-      name: 'eSCL Estándar (scan:Duplex)',
+      name: 'HP Adf Duplex (Adf + Duplex)',
       xml: `<?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
   <pwg:Version>2.0</pwg:Version>
@@ -258,8 +232,31 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <pwg:InputSource>${actualSource}</pwg:InputSource>
-  <scan:InputSource>${actualSource}</scan:InputSource>
+  <pwg:InputSource>Adf</pwg:InputSource>
+  <scan:InputSource>Adf</scan:InputSource>
+  <scan:ColorMode>${normalizedColor}</scan:ColorMode>
+  <scan:XResolution>${resolution}</scan:XResolution>
+  <scan:YResolution>${resolution}</scan:YResolution>
+  <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+  <scan:Duplex>true</scan:Duplex>
+</scan:ScanSettings>`
+    });
+
+    variants.push({
+      name: 'HP Feeder Duplex (Feeder + Duplex)',
+      xml: `<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:Version>2.0</pwg:Version>
+  <pwg:ScanRegions>
+    <pwg:ScanRegion>
+      <pwg:Height>${heightPx}</pwg:Height>
+      <pwg:Width>${widthPx}</pwg:Width>
+      <pwg:XOffset>0</pwg:XOffset>
+      <pwg:YOffset>0</pwg:YOffset>
+    </pwg:ScanRegion>
+  </pwg:ScanRegions>
+  <pwg:InputSource>Feeder</pwg:InputSource>
+  <scan:InputSource>Feeder</scan:InputSource>
   <scan:ColorMode>${normalizedColor}</scan:ColorMode>
   <scan:XResolution>${resolution}</scan:XResolution>
   <scan:YResolution>${resolution}</scan:YResolution>
@@ -464,39 +461,112 @@ async function scanFromHp({ ip, port = 80, protocol = 'http', source = 'Feeder',
 }
 
 // ==========================================================================
-// Windows WIA Local Driver Fallback
+// Windows WIA Local Driver Integration (HP Smart)
 // ==========================================================================
-function scanWithWia() {
-  return new Promise((resolve, reject) => {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const outputPath = path.join(SCANS_DIR, `wia_scan_${timestamp}.jpg`);
-
-    // PowerShell script utilizing Windows WIA COM object
-    const psScript = `
+function getWiaDevices() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve([]);
+    const script = `
       try {
-        $dialog = New-Object -ComObject WIA.CommonDialog
-        $image = $dialog.ShowAcquireImage(1, 0, 0, "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}", $true, $true, $false)
-        if ($image -ne $null) {
-          $image.SaveFile("${outputPath.replace(/\\/g, '\\\\')}")
-          Write-Output "OK"
-        } else {
-          Write-Output "CANCELLED"
+        $dm = New-Object -ComObject WIA.DeviceManager
+        $scanners = @()
+        foreach ($d in $dm.DeviceInfos) {
+          if ($d.Type -eq 1) {
+            $name = try { $d.Properties.Item("Name").Value } catch { "Escáner WIA" }
+            $scanners += @{ id = $d.DeviceID; name = $name }
+          }
         }
+        $scanners | ConvertTo-Json -Compress
+      } catch { '[]' }
+    `;
+    exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${script.replace(/\n/g, ' ')}"`, (err, stdout) => {
+      try {
+        const parsed = JSON.parse((stdout || '').trim() || '[]');
+        resolve(Array.isArray(parsed) ? parsed : [parsed]);
+      } catch (e) {
+        resolve([]);
+      }
+    });
+  });
+}
+
+function scanWithWia({ duplex = false, source = 'Feeder', deviceId = '' } = {}) {
+  return new Promise((resolve, reject) => {
+    if (process.platform !== 'win32') {
+      return reject(new Error('El controlador WIA solo está disponible en Windows.'));
+    }
+    const isDuplex = Boolean(duplex);
+    const reqSource = source || 'Feeder';
+    const escapedScansDir = SCANS_DIR.replace(/\\/g, '\\\\');
+    const escapedDevId = (deviceId || '').replace(/"/g, '`"');
+
+    const script = `
+      try {
+        $dm = New-Object -ComObject WIA.DeviceManager
+        $selectedDev = $null
+        $devId = "${escapedDevId}"
+        if ($devId) {
+          foreach ($d in $dm.DeviceInfos) {
+            if ($d.DeviceID -eq $devId) { $selectedDev = $d.Connect(); break }
+          }
+        }
+        if (-not $selectedDev) {
+          foreach ($d in $dm.DeviceInfos) {
+            if ($d.Type -eq 1) { $selectedDev = $d.Connect(); break }
+          }
+        }
+        if (-not $selectedDev) {
+          throw "No se encontró ningún escáner WIA compatible en Windows."
+        }
+        try {
+          $prop = $selectedDev.Properties.Item("3088")
+          if ("${reqSource}" -eq "Platen") { $prop.Value = 2 }
+          elseif (${isDuplex ? '$true' : '$false'}) { $prop.Value = 5 }
+          else { $prop.Value = 1 }
+        } catch {}
+        try { $selectedDev.Properties.Item("3096").Value = 0 } catch {}
+
+        $scansDir = "${escapedScansDir}"
+        $pages = @()
+        $hasMore = $true
+        $pageIdx = 0
+        $fmt = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}"
+
+        while ($hasMore -and $pageIdx -lt 100) {
+          try {
+            $item = $selectedDev.Items.Item(1)
+            $img = $null
+            try { $img = $item.Transfer($fmt) } catch { $img = $item.Transfer() }
+            if ($img) {
+              $pageIdx++
+              $ts = (Get-Date).ToString("yyyyMMdd_HHmmss")
+              $fn = "hp_wia_${ts}_cara$pageIdx.jpg"
+              $save = Join-Path $scansDir $fn
+              $img.SaveFile($save)
+              $bytes = [System.IO.File]::ReadAllBytes($save)
+              $b64 = [Convert]::ToBase64String($bytes)
+              $pages += @{ dataUrl = "data:image/jpeg;base64,$b64"; type = "image"; filename = $fn }
+              if ("${reqSource}" -eq "Platen") { $hasMore = $false }
+            } else { $hasMore = $false }
+          } catch { $hasMore = $false }
+        }
+        if ($pages.Count -eq 0) { throw "No se obtuvieron hojas del alimentador o cristal." }
+        @{ success = $true; pages = $pages } | ConvertTo-Json -Depth 4
       } catch {
-        Write-Error $_.Exception.Message
+        @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json
       }
     `;
 
-    exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${psScript.replace(/\n/g, ' ')}"`, (err, stdout, stderr) => {
-      if (err || stderr.includes('Exception')) {
-        return reject(new Error(stderr || err.message));
-      }
-      if (fs.existsSync(outputPath)) {
-        const fileBytes = fs.readFileSync(outputPath);
-        const dataUrl = `data:image/jpeg;base64,${fileBytes.toString('base64')}`;
-        resolve([{ dataUrl, type: 'image', filename: path.basename(outputPath) }]);
-      } else {
-        reject(new Error('Escaneo cancelado o no se guardó la imagen.'));
+    exec(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${script.replace(/\n/g, ' ')}"`, { maxBuffer: 1024 * 1024 * 50 }, (err, stdout, stderr) => {
+      try {
+        const res = JSON.parse((stdout || '').trim());
+        if (res.success && res.pages) {
+          resolve(res.pages);
+        } else {
+          reject(new Error(res.error || stderr || 'Error en escaneo WIA.'));
+        }
+      } catch (e) {
+        reject(new Error(stderr || stdout || 'Error al ejecutar escáner WIA.'));
       }
     });
   });
@@ -598,6 +668,10 @@ const server = http.createServer(async (req, res) => {
         }
 
         diagnosis.rawCapabilitiesXml = capsXml;
+        try {
+          fs.writeFileSync(path.join(SCANS_DIR, 'capacidades_hp.xml'), capsXml, 'utf-8');
+          diagnosis.savedXmlPath = 'escaneos/capacidades_hp.xml';
+        } catch (e) {}
 
         // 2. Parse duplex-related tags
         const xmlLower = capsXml.toLowerCase();
@@ -704,8 +778,12 @@ const server = http.createServer(async (req, res) => {
         console.log(`[Tacala] Iniciando escaneo eSCL en HP ${params.ip} (Origen: ${params.source}, Color: ${params.colorMode}, DPI: ${params.resolution})`);
         const pages = await scanFromHp(params);
 
+        const isDuplex = Boolean(params.duplex);
+        const isOddDuplex = isDuplex && pages && (pages.length % 2 !== 0);
+        const duplexWarning = isOddDuplex ? "La impresora completó el trabajo tras escanear 1 sola cara. Para escaneo a doble cara con el motor oficial de HP Smart, selecciona 'Modo Windows WIA' en Tacala." : null;
+
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, pages: pages }));
+        res.end(JSON.stringify({ success: true, pages: pages, duplexWarning }));
       } catch (err) {
         console.error('[Tacala] Error durante escaneo:', err.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -716,8 +794,40 @@ const server = http.createServer(async (req, res) => {
   }
 
   // --------------------------------------------------------------------------
-  // API: Escaneo Nativo Windows WIA (Fallback)
+  // API: Listar Escáneres Windows WIA (HP Smart)
   // --------------------------------------------------------------------------
+  if (pathname === '/api/scanner/wia-devices' && (req.method === 'GET' || req.method === 'POST')) {
+    try {
+      const devices = await getWiaDevices();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, devices }));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, error: err.message, devices: [] }));
+    }
+    return;
+  }
+
+  // --------------------------------------------------------------------------
+  // API: Escaneo Nativo Windows WIA (Motor de HP Smart)
+  // --------------------------------------------------------------------------
+  if (pathname === '/api/scanner/wia-scan' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => body += chunk);
+    req.on('end', async () => {
+      try {
+        const params = JSON.parse(body || '{}');
+        const pages = await scanWithWia(params);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, pages: pages }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
   if (pathname === '/api/scanner/wia' && req.method === 'POST') {
     try {
       const pages = await scanWithWia();

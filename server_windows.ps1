@@ -219,12 +219,177 @@ while ($listener.IsListening) {
             }
 
             Write-Host "[Tacala] Diagnostico completado para HP $($ip) - Modelo '$model', Soporta Duplex: $canDoDuplex, ADF Sensor: $adfState" -ForegroundColor Cyan
+            
+            # Guardar el XML completo devuelto por la HP para consulta técnica
+            $saveXmlPath = Join-Path $scansDir "capacidades_hp.xml"
+            try {
+                [System.IO.File]::WriteAllText($saveXmlPath, $capsXml, [System.Text.Encoding]::UTF8)
+                Write-Host "  [Tacala] Archivo de capacidades guardado en: $saveXmlPath" -ForegroundColor DarkCyan
+            } catch {}
+
+            $diagnosis["savedXmlPath"] = "escaneos/capacidades_hp.xml"
+
             $resJson = @{ success = $true; diagnosis = $diagnosis } | ConvertTo-Json -Depth 6
             $buffer = [System.Text.Encoding]::UTF8.GetBytes($resJson)
             $res.ContentType = "application/json"
             $res.OutputStream.Write($buffer, 0, $buffer.Length)
         } catch {
             Write-Host "[Tacala] Error en diagnostico: $($_.Exception.Message)" -ForegroundColor Red
+            $errJson = @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json
+            $buffer = [System.Text.Encoding]::UTF8.GetBytes($errJson)
+            $res.StatusCode = 500
+            $res.ContentType = "application/json"
+            $res.OutputStream.Write($buffer, 0, $buffer.Length)
+        }
+        $res.Close()
+        continue
+    }
+
+    # ---------------------------------------------------------
+    # API: Listar Escáneres de Windows (WIA - Usado por HP Smart)
+    # ---------------------------------------------------------
+    if ($rawPath -eq "/api/scanner/wia-devices") {
+        try {
+            $dm = New-Object -ComObject WIA.DeviceManager
+            $scanners = @()
+            foreach ($d in $dm.DeviceInfos) {
+                if ($d.Type -eq 1) {
+                    $name = try { $d.Properties.Item("Name").Value } catch { "Escáner WIA" }
+                    $scanners += @{
+                        id = $d.DeviceID
+                        name = $name
+                    }
+                }
+            }
+            Write-Host "[Tacala] Escáneres WIA detectados en Windows: $($scanners.Count)" -ForegroundColor Cyan
+            $resJson = @{ success = $true; devices = $scanners } | ConvertTo-Json
+            $buffer = [System.Text.Encoding]::UTF8.GetBytes($resJson)
+            $res.ContentType = "application/json"
+            $res.OutputStream.Write($buffer, 0, $buffer.Length)
+        } catch {
+            $errJson = @{ success = $false; error = $_.Exception.Message; devices = @() } | ConvertTo-Json
+            $buffer = [System.Text.Encoding]::UTF8.GetBytes($errJson)
+            $res.StatusCode = 500
+            $res.ContentType = "application/json"
+            $res.OutputStream.Write($buffer, 0, $buffer.Length)
+        }
+        $res.Close()
+        continue
+    }
+
+    # ---------------------------------------------------------
+    # API: Escaneo Directo con Controlador Windows WIA (HP Smart)
+    # ---------------------------------------------------------
+    if ($rawPath -eq "/api/scanner/wia-scan" -and $req.HttpMethod -eq "POST") {
+        try {
+            $reader = New-Object System.IO.StreamReader($req.InputStream)
+            $body = $reader.ReadToEnd()
+            $params = $body | ConvertFrom-Json
+
+            $isDuplex = [bool]$params.duplex
+            $reqSource = if ($params.source) { $params.source } else { "Feeder" }
+            $deviceId = if ($params.deviceId) { $params.deviceId } else { "" }
+
+            Write-Host "[Tacala] Iniciando escaneo WIA Windows (Doble cara: $isDuplex, Origen: $reqSource)..." -ForegroundColor Cyan
+
+            $dm = New-Object -ComObject WIA.DeviceManager
+            $selectedDev = $null
+            if ($deviceId) {
+                foreach ($d in $dm.DeviceInfos) {
+                    if ($d.DeviceID -eq $deviceId) {
+                        $selectedDev = $d.Connect()
+                        break
+                    }
+                }
+            }
+            if (-not $selectedDev) {
+                foreach ($d in $dm.DeviceInfos) {
+                    if ($d.Type -eq 1) {
+                        $selectedDev = $d.Connect()
+                        break
+                    }
+                }
+            }
+
+            if (-not $selectedDev) {
+                throw "No se encontró ningún escáner compatible en Windows. Asegúrate de que el escáner o HP Smart esté encendido y conectado por USB o red."
+            }
+
+            # Configuración de propiedades WIA:
+            # 3088: WIA_DPS_DOCUMENT_HANDLING_SELECT (1=FEEDER, 2=FLATBED, 4=DUPLEX, 5=FEEDER+DUPLEX)
+            try {
+                $handlingProp = $selectedDev.Properties.Item("3088")
+                if ($reqSource -eq "Platen") {
+                    $handlingProp.Value = 2
+                } elseif ($isDuplex) {
+                    $handlingProp.Value = 5
+                } else {
+                    $handlingProp.Value = 1
+                }
+            } catch {
+                Write-Host "  [WIA] Aviso al configurar 3088 (Handling): $($_.Exception.Message)" -ForegroundColor DarkGray
+            }
+
+            # 3096: WIA_DPS_PAGES (0 = todas las páginas del alimentador)
+            try {
+                $pagesProp = $selectedDev.Properties.Item("3096")
+                $pagesProp.Value = 0
+            } catch {}
+
+            $pagesList = @()
+            $hasMore = $true
+            $pageIndex = 0
+            $jpegFormat = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}"
+
+            while ($hasMore -and $pageIndex -lt 100) {
+                try {
+                    $item = $selectedDev.Items.Item(1)
+                    $img = $null
+                    try {
+                        $img = $item.Transfer($jpegFormat)
+                    } catch {
+                        $img = $item.Transfer()
+                    }
+
+                    if ($img) {
+                        $pageIndex++
+                        $ts = (Get-Date).ToString("yyyyMMdd_HHmmss")
+                        $fn = "hp_wia_${ts}_cara$pageIndex.jpg"
+                        $savePath = Join-Path $scansDir $fn
+                        $img.SaveFile($savePath)
+
+                        $bytes = [System.IO.File]::ReadAllBytes($savePath)
+                        $b64 = [Convert]::ToBase64String($bytes)
+                        $pagesList += @{
+                            dataUrl = "data:image/jpeg;base64,$b64"
+                            type = "image"
+                            filename = $fn
+                        }
+                        Write-Host "  -> [WIA] Cara $pageIndex escaneada ($([math]::Round($bytes.Length/1024)) KB)" -ForegroundColor Green
+
+                        if ($reqSource -eq "Platen") {
+                            $hasMore = $false
+                        }
+                    } else {
+                        $hasMore = $false
+                    }
+                } catch {
+                    # 0x80210003 es WIA_ERROR_PAPER_EMPTY (ADF vacío, fin normal del trabajo)
+                    $hasMore = $false
+                }
+            }
+
+            if ($pagesList.Count -eq 0) {
+                throw "No se recibieron páginas del escáner WIA. Revisa que haya hojas en el alimentador superior (ADF) o en el cristal."
+            }
+
+            Write-Host "[Tacala] Escaneo WIA completado con éxito. Total caras: $($pagesList.Count)" -ForegroundColor Green
+            $resJson = @{ success = $true; pages = $pagesList } | ConvertTo-Json
+            $buffer = [System.Text.Encoding]::UTF8.GetBytes($resJson)
+            $res.ContentType = "application/json"
+            $res.OutputStream.Write($buffer, 0, $buffer.Length)
+        } catch {
+            Write-Host "[Tacala] Error durante escaneo WIA: $($_.Exception.Message)" -ForegroundColor Red
             $errJson = @{ success = $false; error = $_.Exception.Message } | ConvertTo-Json
             $buffer = [System.Text.Encoding]::UTF8.GetBytes($errJson)
             $res.StatusCode = 500
@@ -247,11 +412,10 @@ while ($listener.IsListening) {
         $isDuplex = [bool]$params.duplex
         $reqSource = if ($params.source) { $params.source } else { "Feeder" }
 
-        # Para HP, el alimentador superior en eSCL es "Feeder"
-        $actualSource = if ($reqSource -eq "Platen" -and -not $isDuplex) { "Platen" } else { "Feeder" }
+        # Para HP, el alimentador superior en eSCL se identifica como 'Adf' o 'Feeder'
+        $actualSource = if ($reqSource -eq "Platen" -and -not $isDuplex) { "Platen" } else { "Adf" }
         $color = if ($params.colorMode -eq "Grayscale") { "Grayscale8" } elseif ($params.colorMode -eq "Mono") { "BlackAndWhite1" } else { "RGB24" }
         $resDpi = if ($params.resolution) { [int]$params.resolution } else { 300 }
-        $duplexStr = if ($isDuplex) { "true" } else { "false" }
 
         $wPx = [math]::Round(8.27 * $resDpi)
         $hPx = [math]::Round(11.69 * $resDpi)
@@ -259,7 +423,7 @@ while ($listener.IsListening) {
         # Variantes de ScanSettings para máxima compatibilidad con HP eSCL
         $variants = @()
         if ($isDuplex) {
-            # Variante 1: Oficial HP ADF Duplex (AdfOptions + DuplexMode + Duplex)
+            # Variante 1: HP ADF Oficial (Adf + AdfOptions Duplex + Duplex true)
             $v1 = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -272,8 +436,8 @@ while ($listener.IsListening) {
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <pwg:InputSource>$actualSource</pwg:InputSource>
-  <scan:InputSource>$actualSource</scan:InputSource>
+  <pwg:InputSource>Adf</pwg:InputSource>
+  <scan:InputSource>Adf</scan:InputSource>
   <scan:ColorMode>$color</scan:ColorMode>
   <scan:XResolution>$resDpi</scan:XResolution>
   <scan:YResolution>$resDpi</scan:YResolution>
@@ -281,11 +445,10 @@ while ($listener.IsListening) {
   <scan:AdfOptions>
     <scan:AdfOption>Duplex</scan:AdfOption>
   </scan:AdfOptions>
-  <scan:DuplexMode>TwoSided</scan:DuplexMode>
   <scan:Duplex>true</scan:Duplex>
 </scan:ScanSettings>
 "@
-            # Variante 2: HP AdfOptions (Duplex) + Duplex booleano (sin DuplexMode)
+            # Variante 2: HP Feeder con AdfOptions (Feeder + AdfOptions Duplex + Duplex true)
             $v2 = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -298,8 +461,8 @@ while ($listener.IsListening) {
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <pwg:InputSource>$actualSource</pwg:InputSource>
-  <scan:InputSource>$actualSource</scan:InputSource>
+  <pwg:InputSource>Feeder</pwg:InputSource>
+  <scan:InputSource>Feeder</scan:InputSource>
   <scan:ColorMode>$color</scan:ColorMode>
   <scan:XResolution>$resDpi</scan:XResolution>
   <scan:YResolution>$resDpi</scan:YResolution>
@@ -310,7 +473,7 @@ while ($listener.IsListening) {
   <scan:Duplex>true</scan:Duplex>
 </scan:ScanSettings>
 "@
-            # Variante 3: Solo AdfOptions (Duplex)
+            # Variante 3: HP Adf estándar (Adf + scan:Duplex booleano)
             $v3 = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -323,18 +486,16 @@ while ($listener.IsListening) {
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <pwg:InputSource>$actualSource</pwg:InputSource>
-  <scan:InputSource>$actualSource</scan:InputSource>
+  <pwg:InputSource>Adf</pwg:InputSource>
+  <scan:InputSource>Adf</scan:InputSource>
   <scan:ColorMode>$color</scan:ColorMode>
   <scan:XResolution>$resDpi</scan:XResolution>
   <scan:YResolution>$resDpi</scan:YResolution>
   <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
-  <scan:AdfOptions>
-    <scan:AdfOption>Duplex</scan:AdfOption>
-  </scan:AdfOptions>
+  <scan:Duplex>true</scan:Duplex>
 </scan:ScanSettings>
 "@
-            # Variante 4: eSCL scan:Duplex estándar
+            # Variante 4: HP Feeder estándar (Feeder + scan:Duplex booleano)
             $v4 = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
@@ -347,8 +508,8 @@ while ($listener.IsListening) {
       <pwg:YOffset>0</pwg:YOffset>
     </pwg:ScanRegion>
   </pwg:ScanRegions>
-  <pwg:InputSource>$actualSource</pwg:InputSource>
-  <scan:InputSource>$actualSource</scan:InputSource>
+  <pwg:InputSource>Feeder</pwg:InputSource>
+  <scan:InputSource>Feeder</scan:InputSource>
   <scan:ColorMode>$color</scan:ColorMode>
   <scan:XResolution>$resDpi</scan:XResolution>
   <scan:YResolution>$resDpi</scan:YResolution>
@@ -357,10 +518,10 @@ while ($listener.IsListening) {
 </scan:ScanSettings>
 "@
             $variants = @(
-                @{ name = "HP Duplex Completo (AdfOptions + DuplexMode + Duplex)"; xml = $v1 },
-                @{ name = "HP Duplex (AdfOptions + Duplex booleano)"; xml = $v2 },
-                @{ name = "HP Duplex (AdfOptions)"; xml = $v3 },
-                @{ name = "eSCL Estándar (scan:Duplex)"; xml = $v4 }
+                @{ name = "HP Adf Duplex (Adf + AdfOptions + Duplex)"; xml = $v1 },
+                @{ name = "HP Feeder Duplex (Feeder + AdfOptions + Duplex)"; xml = $v2 },
+                @{ name = "HP Adf Duplex (Adf + Duplex)"; xml = $v3 },
+                @{ name = "HP Feeder Duplex (Feeder + Duplex)"; xml = $v4 }
             )
         } else {
             $simplexXml = @"
@@ -572,8 +733,13 @@ while ($listener.IsListening) {
                 throw "No se recibieron hojas escaneadas. Revisa que las hojas esten bien insertadas en el alimentador superior (ADF) o en el cristal."
             }
 
+            $isOddDuplex = ($isDuplex -and ($pagesList.Count % 2 -ne 0))
+            $duplexWarning = if ($isOddDuplex) { "La impresora completó el trabajo tras escanear 1 sola cara. Para escaneo a doble cara garantizado con el motor de HP Smart, selecciona 'Modo Windows WIA' en Tacala." } else { $null }
+            if ($isOddDuplex) {
+                Write-Host "  [Tacala] AVISO: Se solicitó doble cara pero la HP concluyó con solo 1 cara." -ForegroundColor Yellow
+            }
             Write-Host "[Tacala] Escaneo completado con exito. Total caras recibidas: $($pagesList.Count)" -ForegroundColor Green
-            $resJson = @{ success = $true; pages = $pagesList } | ConvertTo-Json
+            $resJson = @{ success = $true; pages = $pagesList; duplexWarning = $duplexWarning } | ConvertTo-Json
             $buffer = [System.Text.Encoding]::UTF8.GetBytes($resJson)
             $res.ContentType = "application/json"
             $res.OutputStream.Write($buffer, 0, $buffer.Length)
